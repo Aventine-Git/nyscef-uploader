@@ -3,17 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 vi.mock('node-fetch', () => ({ default: vi.fn() }));
-vi.mock('../../../_SHARED/dist/sql.js', () => ({
+vi.mock('../../src/shared_helpers/sql.js', () => ({
     executeSQLQuery: vi.fn(),
     getUserDetails: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('../../../_SHARED/dist/s3.js', () => ({
+vi.mock('../../src/shared_helpers/s3.js', () => ({
     putS3: vi.fn().mockResolvedValue(true),
 }));
 
 import fetch from 'node-fetch';
-import { executeSQLQuery } from '../../../_SHARED/dist/sql.js';
-import { putS3 } from '../../../_SHARED/dist/s3.js';
+import { executeSQLQuery } from '../../src/shared_helpers/sql.js';
+import { putS3 } from '../../src/shared_helpers/s3.js';
 
 import { findFirstValidCountyCode, getCountyCodeMap } from '../../src/helpers/countyCode.ts';
 import { retry } from '../../src/helpers/retry.ts';

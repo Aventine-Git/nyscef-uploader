@@ -8,6 +8,7 @@
         "build-prod": "tsc && npm prune --production",
         "build": "tsc",
         "start": "node dist/worker.js",
+        "prepare": "husky",
         "lint": "eslint",
         "test": "vitest run",
         "test:e2e": "tsc && npx playwright test upload.spec.ts",
@@ -44,6 +45,7 @@
         "tsx": "^4.20.6",
         "typescript": "^5.9.3",
         "vite-tsconfig-paths": "^5.0.0",
-        "vitest": "^2.0.0"
+        "vitest": "^2.0.0",
+        "husky": "^9.0.0"
     }
 }
