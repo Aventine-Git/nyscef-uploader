@@ -1,6 +1,6 @@
-import { putS3 } from '@shared/s3.js';
+import { putS3 } from '../shared_helpers/s3.js';
 import { Document, DocumentType } from '../types.js';
-import { executeSQLQuery } from '@shared/sql.js';
+import { executeSQLQuery } from '../shared_helpers/sql.js';
 
 export async function handleWithdrawals(docs: Document[], testing: boolean = false) {
     for (const doc of docs) {

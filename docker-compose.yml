@@ -1,8 +1,8 @@
 services:
   nyscef-uploader:
     build:
-      context: ..
-      dockerfile: nyscef-uploader/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     env_file: .env
     # Give the container a /tmp with more space for Chromium profile dirs

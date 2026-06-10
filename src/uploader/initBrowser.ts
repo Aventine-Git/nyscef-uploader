@@ -3,7 +3,7 @@ import { readFileSync } from 'fs';
 import type { ChromiumBrowser } from 'playwright-core';
 import { chromium as playwright } from 'playwright-extra';
 import { fileURLToPath } from 'url';
-import { getSecret, updateSecret } from '@shared/secrets.js';
+import { getSecret, updateSecret } from '../shared_helpers/secrets.js';
 
 // Keep UA version in sync with the actual @sparticuz/chromium binary version.
 // @sparticuz/chromium uses the Chromium major version as its own semver major (e.g. 141.0.0 = Chromium 141).

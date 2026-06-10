@@ -1,0 +1,25 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[typescript]": {
+            "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "files.exclude": {
+            "node_modules": true,
+            "dist": true,
+            "test-results": true
+        },
+        "search.exclude": {
+            "node_modules": true,
+            "dist": true,
+            "package-lock.json": true
+        }
+    }
+}

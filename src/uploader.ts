@@ -2,9 +2,9 @@ import type { ChromiumBrowser, Page } from 'playwright-core'; // Only for type c
 import { chromium as playwright } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
 import { Document, DocumentType } from './types.js';
-import { executeSQLQuery } from '@shared/sql.js';
-import * as tracker from '@shared/ingestTracking.js';
-import { IngestItemStatus, IngestItemType } from '@shared/types.js';
+import { executeSQLQuery } from './shared_helpers/sql.js';
+import * as tracker from './shared_helpers/ingestTracking.js';
+import { IngestItemStatus, IngestItemType } from './shared_helpers/types.js';
 import dotenv from 'dotenv';
 import { retry } from './helpers/retry.js';
 import { addBrowser } from './uploader/addBrowser.js';

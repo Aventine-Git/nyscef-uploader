@@ -1,5 +1,5 @@
 import { Page } from 'playwright-core';
-import { putS3 } from '@shared/s3.js';
+import { putS3 } from '../shared_helpers/s3.js';
 
 export async function tryScreenshot(page: Page): Promise<Buffer | undefined> {
     try {

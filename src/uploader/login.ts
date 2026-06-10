@@ -1,6 +1,16 @@
 import { Page } from 'playwright-core';
 import { bustCfCookieCache, clearCfCookie } from './initBrowser.js';
 import { CloudflareBlockError } from '../errors.js';
+import { getSecret } from '../shared_helpers/secrets.js';
+
+interface NyscefCredentials { username: string; password: string; }
+let cachedCredentials: NyscefCredentials | null = null;
+
+async function getNyscefCredentials(): Promise<NyscefCredentials> {
+    if (cachedCredentials) return cachedCredentials;
+    cachedCredentials = await getSecret<NyscefCredentials>('nyscef/credentials');
+    return cachedCredentials;
+}
 
 export async function login(page: Page) {
     // Brief pause before the first navigation. Cloudflare rate-limits rapid new browser
@@ -53,8 +63,9 @@ export async function login(page: Page) {
         throw new CloudflareBlockError(`Cloudflare challenge (status=${status}, url=${page.url()}) — cf_clearance cookie missing or IP-mismatched for this Lambda container`);
     }
 
-    await page.fill('#txtUserName', process.env.NYSCEF_USERNAME || '');
-    await page.fill('#pwPassword', process.env.NYSCEF_PASSWORD || '');
+    const { username, password } = await getNyscefCredentials();
+    await page.fill('#txtUserName', username);
+    await page.fill('#pwPassword', password);
     await page.click('#btnLogin');
 
     // Wait for navigation and check for password reset redirect

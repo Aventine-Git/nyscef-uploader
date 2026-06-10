@@ -1,4 +1,4 @@
-import { executeSQLQuery } from '@shared/sql.js';
+import { executeSQLQuery } from '../shared_helpers/sql.js';
 
 export async function getClerkEmail(county: string): Promise<string | null> {
     if (!county || county.trim() === '') {

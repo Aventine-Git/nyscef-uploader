@@ -1,6 +1,6 @@
-import { invokeLambda } from '@shared/lambda.js';
-import { getUserDetails } from '@shared/sql.js';
-import { User, NotifierMsg } from '@shared/types.js';
+import { invokeLambda } from '../shared_helpers/lambda.js';
+import { getUserDetails } from '../shared_helpers/sql.js';
+import { User, NotifierMsg } from '../shared_helpers/types.js';
 import { findFirstValidCountyCode } from '../helpers/countyCode.js';
 import { findFirstValidNegotiatorID } from '../helpers/negotiator.js';
 import { uploadScreenshotToS3 } from '../helpers/screenshot.js';

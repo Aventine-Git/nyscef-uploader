@@ -1,7 +1,7 @@
 import { SQSClient, ReceiveMessageCommand, DeleteMessageCommand } from '@aws-sdk/client-sqs';
 import { processSQSRecords, retryFailedItems } from './queue/queueProcessor.js';
 import { testLogin } from './uploader.js';
-import { reportStatus } from '@shared/reporter.js';
+import { reportStatus } from './shared_helpers/reporter.js';
 import dotenv from 'dotenv';
 dotenv.config();
 

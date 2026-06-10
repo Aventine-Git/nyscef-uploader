@@ -1,9 +1,9 @@
-import { invokeLambda } from '@shared/lambda.js';
-import { getUserDetails } from '@shared/sql.js';
+import { invokeLambda } from '../shared_helpers/lambda.js';
+import { getUserDetails } from '../shared_helpers/sql.js';
 import { getClerkEmail } from './getClerkEmail.js';
 import { Document, DocumentType } from '../types.js';
-import { GmailMsg } from '@shared/types.js';
-import { putS3 } from '@shared/s3.js';
+import { GmailMsg } from '../shared_helpers/types.js';
+import { putS3 } from '../shared_helpers/s3.js';
 import { mergePDFBuffers } from '../helpers/buffer.js';
 import { findFirstValidNegotiatorID } from '../helpers/negotiator.js';
 

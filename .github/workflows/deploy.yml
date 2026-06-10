@@ -1,0 +1,78 @@
+name: Test & Deploy
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm test
+
+  deploy:
+    name: Deploy to Server
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Sync files to server
+        run: |
+          sshpass -e rsync -az --delete \
+            -e "ssh -p ${{ secrets.DEPLOY_PORT }} -o StrictHostKeyChecking=no" \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.env' \
+            --exclude='dist' \
+            ./ ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/nyscef-uploader/
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
+
+      - name: Write .env, build, and restart
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          script: |
+            set -e
+            cd /opt/nyscef-uploader
+
+            cat > .env <<EOF
+            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            AWS_REGION=${{ secrets.AWS_REGION }}
+            NYSCEF_QUEUE_URL=${{ secrets.NYSCEF_QUEUE_URL }}
+            CF_INJECT_COOKIE=true
+            NOTIFY_RECIPIENTS=${{ secrets.NOTIFY_RECIPIENTS }}
+            NOTIFY_SLACK_RECIPIENTS=${{ secrets.NOTIFY_SLACK_RECIPIENTS }}
+            WARM_START_LOGIN=false
+            EOF
+
+            chmod 600 .env
+            docker compose up --build -d
+            echo "Deploy complete."
