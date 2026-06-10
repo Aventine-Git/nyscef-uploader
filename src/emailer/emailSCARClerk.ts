@@ -68,7 +68,7 @@ export async function emailSCARClerk(stips: Document[], realFrom: string, testin
         cc: testing ? undefined : negotiatorEmail,
         subject: subject,
         body: htmlBody + scarIDs + link + footer,
-        from: process.env.STIPULATIONS_EMAIL_USER!,
+        from: 'stipulations@aventine.ai',
     };
 
     try {
