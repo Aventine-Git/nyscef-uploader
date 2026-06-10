@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../../_SHARED/dist/lambda.js', () => ({
+vi.mock('../../src/shared_helpers/lambda.js', () => ({
     invokeLambda: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('../../../_SHARED/dist/sql.js', () => ({
+vi.mock('../../src/shared_helpers/sql.js', () => ({
     executeSQLQuery: vi.fn(),
     getUserDetails: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('../../../_SHARED/dist/s3.js', () => ({
+vi.mock('../../src/shared_helpers/s3.js', () => ({
     putS3: vi.fn().mockResolvedValue(undefined),
     getS3: vi.fn().mockResolvedValue(undefined),
 }));
@@ -19,8 +19,8 @@ vi.mock('../../src/helpers/buffer.js', () => ({
     mergePDFBuffers: vi.fn().mockResolvedValue(Buffer.from('merged')),
 }));
 
-import { invokeLambda } from '../../../_SHARED/dist/lambda.js';
-import { executeSQLQuery, getUserDetails } from '../../../_SHARED/dist/sql.js';
+import { invokeLambda } from '../../src/shared_helpers/lambda.js';
+import { executeSQLQuery, getUserDetails } from '../../src/shared_helpers/sql.js';
 
 import { formatDataTable } from '../../src/emailer/formatDataTable.ts';
 import { getClerkEmail } from '../../src/emailer/getClerkEmail.ts';
