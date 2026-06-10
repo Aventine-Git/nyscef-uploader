@@ -1,295 +1,172 @@
 # NYSCEF Uploader
 
-This service automates the upload of stipulation, evidence, and misc letter documents to the New York State Courts Electronic Filing (NYSCEF) system. It supports three invocation modes: an SQS-triggered queue-based path (primary), a direct Lambda invocation path (legacy), and a scheduled EventBridge path for automatic retries.
+Automates the upload of stipulation, evidence, and misc letter documents to the New York State Courts Electronic Filing (NYSCEF) system via Playwright browser automation. Runs as a long-lived Docker container that polls SQS for jobs.
+
+---
+
+## How it works
+
+A long-running Node.js worker (`src/worker.ts`) does two things:
+
+- **Polls SQS** every 20 seconds for new upload jobs (each message is `{ id: <NyscefUploadQueue row ID> }`)
+- **Retries failed items** every 15 minutes (items stuck in `PROCESSING` > 15 min are reset to `FAILED` first)
+
+Each job fetches the queue item from `Court.NyscefUploadQueue`, downloads the PDF from S3, launches a Chromium browser, logs into NYSCEF, and files the document. One document per SQS message.
+
+Everything else — database, S3, Secrets Manager, invoking other Lambdas — is unchanged from the Lambda version.
+
+For full deployment instructions, see [SERVER-DEPLOY.md](SERVER-DEPLOY.md).
 
 ---
 
 ## Features
 
-- Uploads stipulation, evidence, and misc letter PDFs to NYSCEF via Playwright browser automation.
-- **Queue-based processing** — reads from `Court.NyscefUploadQueue`, processes one document per SQS message.
-- **Automatic retry** — failed items are retried up to 3 times via scheduled EventBridge trigger.
-- **Stuck-item recovery** — items stuck in `PROCESSING` for 15+ minutes are automatically reset to `FAILED`.
-- **Consolidated notifications** — waits for all items in an ingest to complete before sending a summary notification.
-- **Browser stability** — browser initialization retries up to 3 times with a fresh Chromium instance on each attempt.
-- Handles stipulations, evidence (Sales Comp Analysis / Equity Report), and misc letters (correspondence to judge).
-- Emails SCAR clerks (with the negotiator CC'd) and handles withdrawal status updates after successful upload.
-- Supports testing mode (no actual NYSCEF submission).
-- Legacy direct-invocation path retained for backwards compatibility.
+- Uploads stipulation, evidence, and misc letter PDFs to NYSCEF via Playwright + Chromium
+- **Queue-based processing** — reads from `Court.NyscefUploadQueue`, processes one document per SQS message
+- **Automatic retry** — failed items are retried up to 3 times; scheduler runs every 15 minutes
+- **Stuck-item recovery** — items stuck in `PROCESSING` for 15+ minutes are automatically reset to `FAILED`
+- **Consolidated notifications** — waits for all items in an ingest to complete before sending a summary notification
+- **Browser stability** — browser initialization retries up to 3 times with a fresh Chromium instance on each attempt
+- Handles stipulations, evidence (Sales Comp Analysis / Equity Report), and misc letters (correspondence to judge)
+- Emails SCAR clerks (with the negotiator CC'd) and handles withdrawal status updates after successful upload
+- Supports testing mode (no actual NYSCEF submission)
 
 ---
 
-## Cloudflare & Login Infrastructure
+## Cloudflare & Login
 
-### The problem
+NYSCEF's login page is protected by Cloudflare, which issues a `cf_clearance` cookie that is cryptographically tied to your IP address. Because this container runs on a server with a fixed IP, the same cookie is valid for every login attempt.
 
-NYSCEF's login page is protected by Cloudflare. Cloudflare issues a cookie called `cf_clearance`
-to browsers that pass its bot check — think of it as a wristband that lets you through the door
-without being checked again. The catch: this wristband is cryptographically tied to your exact IP
-address. Show up from a different IP and it's rejected.
+### Cookie flow
 
-AWS Lambda normally runs on a shared IP pool — each cold start (new container) gets a different
-IP from a massive AWS-owned range. Any stored cookie is always wrong for the new IP. Cloudflare
-also hard-blocks AWS datacenter IPs on NYSCEF with a 403 managed challenge that cannot be
-auto-solved in a headless browser. Warm starts (reusing an already-running container) work fine
-because the browser is already logged in and Cloudflare is never contacted again.
+**First run (no existing cookie):**
+1. `initBrowser.ts` reads `nyscef/cf_clearance` from Secrets Manager — empty
+2. Browser navigates to NYSCEF without injecting a cookie
+3. Cloudflare shows a 503 interstitial ("Checking your browser...") — the browser auto-solves it
+4. Login succeeds; the resulting `cf_clearance` is saved back to Secrets Manager
 
-### The fix (implemented June 2026)
+**Subsequent runs:**
+1. `initBrowser.ts` reads `nyscef/cf_clearance` from Secrets Manager — has a value
+2. Cookie is injected into the browser context before any navigation
+3. Cloudflare sees a valid cookie for the known server IP → no challenge
+4. Login succeeds; saves the latest cookie back to Secrets Manager
 
-The Lambda was placed inside a dedicated VPC with a NAT Gateway backed by a fixed Elastic IP.
-Every container — cold start or warm start — now egresses through that one address. Cloudflare
-always sees the same IP.
+**Stale cookie (403 on an injected cookie):**
+1. `login.ts` detects the 403 and calls `clearCfCookie()` — evicts the bad value from Secrets Manager
+2. Throws `CloudflareBlockError` to stop retry loops immediately
+3. Next attempt arrives clean and re-bootstraps via the 503 interstitial path
 
-After a successful first login from that IP, the `cf_clearance` cookie is stored in AWS Secrets
-Manager (`nyscef/cf_clearance`). Every subsequent cold start injects the stored cookie before
-navigating to NYSCEF. Cloudflare sees a valid cookie for a known IP and lets us through without
-a challenge.
+### NYSCEF credentials
 
-If the stored cookie ever becomes stale and triggers a 403, the code evicts it from Secrets
-Manager automatically so the next attempt arrives clean and re-bootstraps.
-
-### Current AWS network layout
-
-```
-Lambda (nyscef-uploader)
-  └── VPC: nyscef-vpc
-        ├── Private subnet: nyscef-private  ← Lambda lives here
-        │     └── Route: 0.0.0.0/0 → NAT Gateway
-        └── Public subnet: nyscef-public
-              └── NAT Gateway: nyscef-nat
-                    └── Elastic IP  ← fixed IP Cloudflare sees
-                          └── Internet Gateway: nyscef-igw
-```
-
-| Resource | Name |
-|----------|------|
-| VPC | `nyscef-vpc` |
-| Private subnet | `nyscef-private` (CIDR `10.0.1.0/24`) |
-| Public subnet | `nyscef-public` (CIDR `10.0.0.0/24`) |
-| Internet Gateway | `nyscef-igw` |
-| NAT Gateway | `nyscef-nat` |
-| Lambda security group | `nyscef-lambda-sg` |
-
-> **Keep a note of the Elastic IP address.** If the cookie ever needs to be manually
-> re-bootstrapped (see [EC2-COOKIE-BOOTSTRAP.md](EC2-COOKIE-BOOTSTRAP.md)), you need to know
-> which IP the cookie was issued for.
-
-### How the cookie flow works
-
-**Cold start:**
-1. `initBrowser.ts` reads `nyscef/cf_clearance` from Secrets Manager
-2. If a value is present → injected into the browser context before any navigation
-3. Navigates to NYSCEF — Cloudflare sees valid cookie for the known IP → no challenge
-4. Logs in, processes queue items
-5. Saves the latest `cf_clearance` back to Secrets Manager after successful login
-
-**Warm start:** Browser and NYSCEF session are reused from the prior invocation. Login (and
-Cloudflare) is bypassed entirely.
-
-**Stale cookie detected (403 on an injected cookie):**
-1. `login.ts` detects the 403 and calls `clearCfCookie()` — evicts the bad value from
-   Secrets Manager immediately
-2. Throws `CloudflareBlockError` (`noRetry=true`) to stop all retry loops
-3. Next cold start arrives clean, gets a fresh cookie via the 503 interstitial path, saves it
-
-### IAM permissions required
-
-Beyond the standard Lambda execution policies:
-
-| Permission | Resource | Why |
-|------------|----------|-----|
-| `AWSLambdaVPCAccessExecutionRole` (managed policy) | — | VPC network interface create/delete |
-| `secretsmanager:GetSecretValue` | `nyscef/cf_clearance`, `db` | Read credentials and cookie |
-| `secretsmanager:PutSecretValue` | `nyscef/cf_clearance` | Save or clear the cookie |
-
-The `PutSecretValue` permission is an inline policy scoped to the specific secret ARN
-(`arn:aws:secretsmanager:us-east-1:434028085475:secret:nyscef/cf_clearance*`).
-
-### Related guides
-
-| File | What it covers |
-|------|---------------|
-| [CLOUDFLARE-SETUP.md](CLOUDFLARE-SETUP.md) | Full step-by-step AWS Console instructions for VPC, NAT Gateway, EIP, Lambda VPC attachment, and the residential proxy fallback |
-| [EC2-COOKIE-BOOTSTRAP.md](EC2-COOKIE-BOOTSTRAP.md) | How to spin up a temporary EC2 in the same VPC to earn the first `cf_clearance` cookie for the Elastic IP |
+Username and password are stored in the `nyscef/credentials` Secrets Manager secret
+(`{ "username": "...", "password": "..." }`). They are fetched on the first login attempt and
+cached in-process for the lifetime of the container.
 
 ---
 
-## Invocation Modes
-
-The handler in `src/index.ts` routes to the appropriate path based on the event shape:
-
-### 1. SQS Trigger (Primary)
-
-**Triggered by**: SQS messages sent by `stipulation-ingest` or `evidence-ingest` when `NYSCEF_QUEUE_URL` is configured.
-
-Each SQS message contains `{ id: <NyscefUploadQueue row ID> }`. The handler fetches the queue item from the database, downloads the PDF from S3, and uploads it to NYSCEF. One document is processed per message.
-
-This is the preferred path — it processes documents immediately as they are queued, with built-in retry and status tracking.
-
-### 2. Direct Lambda Invocation (Legacy)
-
-**Triggered by**: Direct Lambda invocation with a `documents` array in the payload — used by `stipulation-ingest` and `evidence-ingest` when `NYSCEF_QUEUE_URL` is **not** configured.
-
-**Payload format**:
-
-```json
-{
-  "documents": [
-    {
-      "scarID": "string",            // Required: SCAR Index Number
-      "parcelID": "string",          // Required: Parcel Identifier
-      "year": 2025,                  // Required: Tax year (number)
-      "countyCode": "string",        // Optional: auto-detected from parcelID if omitted
-      "county": "string",            // Optional: auto-detected from county code map if omitted
-      "negotiatorID": 123,           // Optional: auto-detected from database if omitted
-      "isVillage": false,            // Optional: auto-detected from database if omitted
-      "disposition": "W",            // Stipulations only: disposition code (e.g. "W" for withdrawal)
-      "stipBufferKey": "string",     // Stipulations only: S3 key under stipulation-ingest-files/pdfs/
-      "evidenceTypes": ["unequal"],  // Evidence only: list of evidence types ("unequal", "excessive")
-      "unequalBufferKey": "string",  // Evidence only: S3 key for unequal evidence (auto-looked up if omitted)
-      "excessiveBufferKey": "string",// Evidence only: S3 key for excessive evidence (auto-looked up if omitted)
-      "miscBufferKey": "string"      // Misc only: S3 key under aventine-court-docs for the letter PDF
-    }
-  ],
-  "testing": false,                  // Optional: if true, skips actual NYSCEF submission
-  "ingestID": 456,                   // Optional: ingest tracking ID
-  "realFrom": "user@email.com"       // Optional: sender email for clerk notifications
-}
-```
-
-**Example — invoke from another Lambda in this repo**:
-
-```js
-import { invokeLambdaAsync } from '@shared/lambda.js';
-
-await invokeLambdaAsync('nyscef-uploader', {
-  documents: [
-    {
-      scarID: '12345/2025',
-      parcelID: '103-1234567890',
-      year: 2025,
-      disposition: 'W',
-      stipBufferKey: '103-1234567890_1234567890.pdf',
-    },
-  ],
-  testing: true,
-  realFrom: 'your@email.com',
-});
-```
-
-**Example — invoke via AWS SDK**:
-
-```js
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
-
-const client = new LambdaClient({ region: 'us-east-1' });
-const command = new InvokeCommand({
-  FunctionName: 'nyscef-uploader',
-  Payload: Buffer.from(JSON.stringify({
-    documents: [{ scarID: '12345/2025', parcelID: '103-1234567890', year: 2025, disposition: 'W', stipBufferKey: '103-1234567890_1234567890.pdf' }],
-    testing: true,
-  })),
-});
-const response = await client.send(command);
-```
-
-### 3. Login Test
-
-**Triggered by**: Manual test invocation with `{ "_loginTest": true }`.
-
-Launches a real browser, attempts the full NYSCEF login flow, and saves the resulting
-`cf_clearance` cookie to Secrets Manager. Use this to verify the VPC + cookie injection setup
-is working, or to bootstrap the cookie after resetting it. Does not process any queue items.
-
-### 4. Self-Test Ping
-
-**Triggered by**: Manual test invocation with `{ "_selfTest": true }`.
-
-Just confirms the handler loaded and routed correctly. No browser, no network calls to NYSCEF.
-
-### 5. Force Retry
-
-**Triggered by**: Manual invocation with `{ "forceRetry": true }`.
-
-Processes all items in `QUEUED` or `FAILED` status regardless of attempt count. Use when items
-have exhausted their 3-attempt limit but you want to retry them anyway.
-
-### 7. Scheduled EventBridge Trigger (Retry)
-
-**Triggered by**: EventBridge scheduled rule (e.g. every 10 minutes).
-
-Any event that is not an SQS event and does not contain a `documents` array is treated as a scheduled retry trigger. The handler:
-1. Resets any items stuck in `PROCESSING` for 15+ minutes back to `FAILED`
-2. Fetches all `FAILED` items with fewer than 3 attempts
-3. Retries each eligible item
-
----
-
-## Queue-Based Processing (`Court.NyscefUploadQueue`)
-
-### Queue Item Lifecycle
+## Queue Item Lifecycle
 
 ```
 QUEUED → PROCESSING → UPLOADED
                     → SKIPPED   (already uploaded to NYSCEF)
-                    → FAILED    (error — eligible for retry if attempts < 3)
+                    → FAILED    (error — eligible for retry if Attempts < 3)
 ```
 
 | Status | Description |
-|---|---|
-| `QUEUED` | Inserted by stipulation-ingest, evidence-ingest, or other callers, waiting to be processed |
-| `PROCESSING` | Claimed by the uploader, upload in progress |
+|--------|-------------|
+| `QUEUED` | Waiting to be processed |
+| `PROCESSING` | Claimed, upload in progress |
 | `UPLOADED` | Successfully filed on NYSCEF |
 | `SKIPPED` | Already uploaded in a previous run — no action taken |
-| `FAILED` | Upload failed; `ErrorMessage` column holds the error; retried up to 3 times |
+| `FAILED` | Upload failed; `ErrorMessage` has the reason; retried up to 3 times |
 
-### Retry Logic
+### Retry logic
 
-- Each item tracks an `Attempts` counter, incremented on each claim.
-- Items with `Status = 'FAILED'` and `Attempts < 3` are eligible for retry.
-- The scheduled EventBridge trigger runs the retry loop automatically.
-- Items stuck in `PROCESSING` for more than 15 minutes are reset to `FAILED` with the message `"Timed out in PROCESSING state"`.
+- `Attempts` counter is incremented each time an item is claimed
+- Items with `Status = 'FAILED'` and `Attempts < 3` are retried by the scheduler
+- Items stuck in `PROCESSING` for more than 15 minutes are reset to `FAILED` with the message `"Timed out in PROCESSING state"` — this handles crashes or container restarts mid-upload
 
-### Consolidated Notifications
+### Consolidated notifications
 
-In the SQS path, notifications are deferred until all items for a given `IngestID` are in a terminal state (`UPLOADED`, `SKIPPED`, or `FAILED`). This prevents a flood of individual notifications when a batch of stips arrives at once. Once the last item for an ingest completes, a single summary notification is sent.
+Notifications are deferred until all items for a given `IngestID` reach a terminal state (`UPLOADED`, `SKIPPED`, or `FAILED`). This sends one summary notification per ingest instead of one per document.
 
 ---
 
-## Response
+## Document Types
 
-- **200 OK**: `{ "statusCode": 200, "body": "done" }` on success.
-- **500 Internal Server Error**: `{ "statusCode": 500, "body": "<error message>" }` on unhandled error.
+Three types are supported — all handled by `DocumentType` in `src/types.ts`:
+
+| Type | NYSCEF filing type | Notes |
+|------|--------------------|-------|
+| `STIPULATION` | Appropriate stip variant based on `disposition` code | DB: `StipTracking.Status = 'NyscefUploaded'` |
+| `EVIDENCE` | Exhibit A / B | DB: `Court.UploadedEvidence` |
+| `MISC` | Letter / Correspondence to Judge | Not deduplicated; can be re-uploaded freely |
 
 ---
 
 ## Environment Variables
 
-| Variable | Required | Notes |
-|----------|----------|-------|
-| `NYSCEF_USERNAME` | Yes | NYSCEF portal login username |
-| `NYSCEF_PASSWORD` | Yes | NYSCEF portal login password |
-| `NYSCEF_QUEUE_URL` | Yes | SQS queue URL for upload jobs |
-| `CF_INJECT_COOKIE` | Yes | Set to `true` in production — injects the stored `cf_clearance` cookie on cold starts. Only safe with a fixed egress IP (VPC + NAT Gateway). |
-| `PROXY_URL` | No | `http://user:pass@host:port` — routes Playwright through a residential proxy. Only needed if the Elastic IP gets hard-blocked by Cloudflare. |
-| `CF_COOKIE` | No | Legacy fallback cookie value. Ignored if Secrets Manager has a value. |
-| `STIPULATIONS_EMAIL_CLIENT_ID` | Yes | OAuth2 credentials for clerk notification emails |
-| `STIPULATIONS_EMAIL_CLIENT_SECRET` | Yes | OAuth2 credentials for clerk notification emails |
-| `STIPULATIONS_EMAIL_REFRESH_TOKEN` | Yes | OAuth2 credentials for clerk notification emails |
-| `STIPULATIONS_EMAIL_USER` | Yes | Sender address for clerk notification emails |
-| `database`, `endpoint`, `user`, `password`, `port` | Yes | Database connection (overridden by `db` Secrets Manager secret in production) |
+All credentials are in Secrets Manager — only infrastructure config goes in `.env`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AWS_ACCESS_KEY_ID` | Yes | IAM user credentials |
+| `AWS_SECRET_ACCESS_KEY` | Yes | IAM user credentials |
+| `AWS_REGION` | Yes | e.g. `us-east-1` |
+| `NYSCEF_QUEUE_URL` | Yes | SQS queue URL — AWS Console → SQS → your queue → copy URL |
+| `CF_INJECT_COOKIE` | Yes | Set to `true` — server has a fixed IP, so cookie injection is safe and prevents Cloudflare challenges |
+| `WARM_START_LOGIN` | No | `true` = browser launches at container startup so the first upload has no cold-start delay. Default: `false` |
+| `NOTIFY_RECIPIENTS` | No | Comma-separated email addresses to notify on upload results |
+| `NOTIFY_SLACK_RECIPIENTS` | No | Comma-separated Slack user IDs for error notifications |
+
+Secrets Manager secrets (not env vars):
+
+| Secret ID | Shape | Purpose |
+|-----------|-------|---------|
+| `db` | `{ host, port, username, password, dbname }` | MySQL connection |
+| `nyscef/credentials` | `{ username, password }` | NYSCEF portal login |
+| `nyscef/cf_clearance` | `{ cf_clearance }` | Cloudflare cookie — read/write by the uploader |
 
 ---
 
-## Notes
+## Deployment
 
-- The SQS path processes one document per message. Evidence documents with multiple types (unequal + excessive) are inserted as separate queue items.
-- The direct-invocation (legacy) path can handle multiple documents per call and sends notifications immediately after the full batch completes.
-- If evidence S3 keys are not provided in the legacy path, they are auto-looked up from `aventine-court-docs/residential/evidence/{year}/{parcelID}/`.
-- Only documents with `hasBeenUploaded: true` (and not `wasSkipped`) are processed for withdrawal status updates and clerk emails.
-- Browser initialization retries up to 3 times with a fully fresh Chromium instance on each attempt — this handles Lambda shared memory (`/dev/shm`) exhaustion which can cause the browser process to crash on startup.
-- **Document types**: Three types are supported — `STIPULATION` (filed as the appropriate stip variant based on disposition), `EVIDENCE` (filed as exhibit A/B), and `MISC` (filed as "LETTER / CORRESPONDENCE TO JUDGE"). Misc letter uploads are not deduplicated or DB-tracked; they can be re-uploaded freely.
-- For type definitions, see [src/types.ts](src/types.ts).
+Merging a PR to `main` runs unit tests and auto-deploys to the server via Docker context over SSH.
+The container is built on the server — no source files are stored there.
+
+See [SERVER-DEPLOY.md](SERVER-DEPLOY.md) for initial server setup, docker context configuration,
+and GitHub Actions secrets setup (including Tailscale for private network access).
+
+---
+
+## Running locally / diagnostics
+
+```bash
+# Build and start
+docker compose build
+docker compose up -d
+
+# Watch logs
+docker compose logs -f
+
+# Trigger a login test (verifies browser + Cloudflare + Secrets Manager)
+docker compose exec nyscef-uploader node -e "
+import('./dist/uploader.js').then(m => m.testLogin()).then(() => {
+  console.log('Login test complete.');
+  process.exit(0);
+}).catch(err => {
+  console.error('Login test failed:', err.message);
+  process.exit(1);
+});
+"
+
+# Force-retry all exhausted items
+docker compose exec nyscef-uploader node -e "
+import('./dist/queue/queueProcessor.js').then(m => m.forceRetryAllItems()).then(() => {
+  console.log('Done.'); process.exit(0);
+}).catch(err => { console.error(err.message); process.exit(1); });
+"
+```
 
 ---
 
@@ -297,20 +174,14 @@ In the SQS path, notifications are deferred until all items for a given `IngestI
 
 ### Cloudflare / login issues
 
-Use the `_loginTest` invocation to diagnose without touching real queue items:
-
-```json
-{ "_loginTest": true }
-```
-
-**Healthy cold start** (look for this in CloudWatch):
+**Healthy cold start:**
 ```
 Injected cf_clearance cookie
 Login page response: status=200...
 Successfully logged into NYSCEF
 ```
 
-**First run after cookie reset** (expected — bootstraps a new cookie):
+**First run after cookie reset (expected — bootstraps a new cookie):**
 ```
 cf_clearance is empty — arriving clean for this cold start
 Cloudflare 503 interstitial — waiting for it to auto-solve...
@@ -318,49 +189,68 @@ Successfully logged into NYSCEF
 Persisted fresh cf_clearance to Secrets Manager
 ```
 
-**Stale cookie self-healing** (one-time, recovers automatically):
+**Stale cookie self-healing (one-time, recovers automatically):**
 ```
 Injected cf_clearance cookie
 Login page response: status=403...
 Cleared stale cf_clearance from Secrets Manager
 ```
-The next invocation will arrive clean and re-bootstrap. No action needed unless 403s persist.
+Next attempt arrives clean and re-bootstraps. No action needed unless 403s persist.
 
-**Hard 403 on a clean attempt** (IP is blocked — needs intervention):
-```
-cf_clearance is empty — arriving clean for this cold start
-Login page response: status=403...
-```
-See [EC2-COOKIE-BOOTSTRAP.md](EC2-COOKIE-BOOTSTRAP.md) to try earning a cookie from a real
-browser on the same IP. If that also fails, see the proxy fallback in
-[CLOUDFLARE-SETUP.md](CLOUDFLARE-SETUP.md).
+**403 persists after multiple attempts:**
+The server's IP may be temporarily blocked. Wait 10–15 minutes and run the login test again.
+If it keeps failing, check whether the IP changed (ISP reassignment) or contact Cloudflare support.
 
-**Cookie expired** (~1 year lifespan):
-Same as stale cookie — the self-healing code handles it automatically. If 403s persist through
-multiple SQS retry cycles, manually reset:
-- Secrets Manager → `nyscef/cf_clearance` → set to `{ "cf_clearance": "" }`
-- Run `_loginTest` to force a clean bootstrap
-
-**NYSCEF password needs reset** (login redirects to `/sspr/`):
-Reset the password manually at the NYSCEF portal, then update `NYSCEF_PASSWORD` in Lambda
-environment variables.
+**NYSCEF password needs reset:**
+Reset at the NYSCEF portal, then update `nyscef/credentials` in Secrets Manager.
+No container restart needed — credentials are fetched on each login attempt.
 
 ### Queue issues
 
-- **Upload stuck in PROCESSING**: EventBridge retry automatically resets items stuck 15+ minutes.
-  Check CloudWatch for the Lambda run that claimed the item.
-- **All 3 attempts failed**: Check `ErrorMessage` in `Court.NyscefUploadQueue`. Common causes:
-  Cloudflare block, case not found in NYSCEF, or NYSCEF session dropped mid-upload.
-- **Browser crashes on startup**: Usually Lambda `/tmp` exhaustion. Increase ephemeral storage
-  to 1024MB+ in Lambda configuration.
-- **Legacy path — missing fields**: Each document needs `scarID`, `parcelID`, `year`, and one of
-  `stipBufferKey`, `evidenceTypes`, or `miscBufferKey`.
-- Use `testing: true` in the payload to run without actually submitting to NYSCEF.
+- **Item stuck in PROCESSING**: Retry scheduler resets these automatically every 15 minutes. Restart the container to trigger an immediate reset: `docker compose restart`
+- **All 3 attempts failed**: Check `ErrorMessage` in `Court.NyscefUploadQueue`. Common causes: Cloudflare block, case not found in NYSCEF, NYSCEF session dropped mid-upload
+- **Container won't start**: Check `docker compose logs` — usually a missing or malformed `.env`, or `NYSCEF_QUEUE_URL` not set
+
+---
+
+## Source layout
+
+```
+src/
+  worker.ts                 — entry point: SQS poll loop + retry scheduler
+  index.ts                  — original Lambda handler (kept, not used by the worker)
+  uploader.ts               — browser session management + upload orchestration
+  types.ts                  — Document, DocumentType, EventInput
+  errors.ts                 — CloudflareBlockError
+  direct.ts                 — legacy direct-invocation path
+  uploader/
+    addBrowser.ts           — browser launch + login with retries
+    login.ts                — NYSCEF login flow + Cloudflare detection
+    initBrowser.ts          — cf_clearance cookie inject/save/clear
+    upload.ts               — actual NYSCEF form navigation and filing
+    checkAlreadyUploaded.ts — deduplication check
+    cleanupStaleBrowsers.ts — browser cleanup
+  queue/
+    queueClient.ts          — NyscefUploadQueue DB operations
+    queueProcessor.ts       — SQS record handler + retry runner
+  preparer/
+    prepareFromQueueItem.ts — DB row → Document shape
+  emailer/
+    emailSCARClerk.ts       — clerk notification email via gmail-sender
+    notifyResults.ts        — success/failure notification via notifier
+    getClerkEmail.ts        — look up clerk email for a county
+    getCourtDate.ts         — look up next court date for a case
+  helpers/
+    retry.ts                — generic async retry wrapper
+    screenshot.ts           — error screenshot capture → S3
+    withdrawals.ts          — withdrawal status update after upload
+    negotiator.ts           — look up negotiator for a parcel
+    determineIsVillage.ts   — village detection
+  shared_helpers/           — copies of _SHARED library modules (sql, s3, secrets, etc.)
+```
 
 ---
 
 ## Maintainers
 
-- Catherine Sangiovanni
-
-For questions or support, contact: catherine@aventine.ai
+Catherine Sangiovanni — catherine@aventine.ai

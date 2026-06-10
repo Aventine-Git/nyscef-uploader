@@ -1,4 +1,4 @@
-import { getS3 } from '@shared/s3.js';
+import { getS3 } from '../shared_helpers/s3.js';
 import { Readable } from 'stream';
 import { streamToBuffer } from '../helpers/buffer.js';
 import { Document, DocumentType } from '../types.js';

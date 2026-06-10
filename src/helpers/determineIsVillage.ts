@@ -1,4 +1,4 @@
-import { executeSQLQuery } from '@shared/sql.js';
+import { executeSQLQuery } from '../shared_helpers/sql.js';
 
 export async function determineIsVillage(scarID: string): Promise<boolean> {
     const query = `SELECT VillageSCARIndexNumber FROM Courtfiles WHERE VillageSCARIndexNumber = ?`;

@@ -3,7 +3,7 @@ import { processDirectInvocation } from './direct.js';
 import { forceRetryAllItems, processSQSRecords, retryFailedItems } from './queue/queueProcessor.js';
 import { testLogin } from './uploader.js';
 import { EventInput } from './types.js';
-import { withErrorReporting } from '@shared/handlerWrapper.js';
+import { withErrorReporting } from './shared_helpers/handlerWrapper.js';
 
 async function _handler(event: any): Promise<{ statusCode: number; body: string }> {
     console.log('Handler invoked with event:', JSON.stringify(event, null, 2));

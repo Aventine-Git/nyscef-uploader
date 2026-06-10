@@ -5,9 +5,9 @@
     "main": "index.js",
     "type": "module",
     "scripts": {
-        "build-prod": "tsc && node ../_SHARED/scripts/fix-imports.mjs && npm prune --production",
+        "build-prod": "tsc && npm prune --production",
         "build": "tsc",
-        "start": "node dist/index.js",
+        "start": "node dist/worker.js",
         "lint": "eslint",
         "test": "vitest run",
         "test:e2e": "tsc && npx playwright test upload.spec.ts",
@@ -19,7 +19,11 @@
     "author": "",
     "license": "ISC",
     "dependencies": {
+        "@aws-sdk/client-lambda": "^3.931.0",
+        "@aws-sdk/client-s3": "^3.1065.0",
+        "@aws-sdk/client-secrets-manager": "^3.931.0",
         "@aws-sdk/client-sqs": "^3.931.0",
+        "@aws-sdk/s3-request-presigner": "^3.931.0",
         "@sparticuz/chromium": "^141.0.0",
         "dotenv": "^17.2.3",
         "mysql2": "^3.15.3",
@@ -30,18 +34,16 @@
         "puppeteer-extra-plugin-stealth": "^2.11.2"
     },
     "devDependencies": {
-        "@aws-sdk/client-lambda": "^3.931.0",
-        "@aws-sdk/client-s3": "^3.919.0",
         "@playwright/test": "^1.56.1",
         "@types/node": "^24.10.1",
         "@typescript-eslint/eslint-plugin": "^8.46.1",
         "@typescript-eslint/parser": "^8.46.1",
+        "esbuild": "^0.25.0",
         "eslint": "^9.37.0",
         "eslint-config-problems": "^9.0.0",
         "tsx": "^4.20.6",
         "typescript": "^5.9.3",
         "vite-tsconfig-paths": "^5.0.0",
-        "vitest": "^2.0.0",
-        "esbuild": "^0.25.0"
+        "vitest": "^2.0.0"
     }
 }

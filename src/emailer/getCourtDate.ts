@@ -1,4 +1,4 @@
-import { executeSQLQuery } from '@shared/sql.js';
+import { executeSQLQuery } from '../shared_helpers/sql.js';
 import { Document } from '../types.js';
 
 export default async function getCourtDate(document: Document): Promise<string | null> {
