@@ -6,11 +6,17 @@ export async function retry(fn: () => Promise<unknown>, humanError: string, maxR
         } catch (err: any) {
             if (err?.noRetry === true) throw err;
             error = err;
-            console.warn(`Attempt ${attempt} failed. Retrying in ${delayMs}ms...`, err);
-            await new Promise((res) => global.setTimeout(res, delayMs));
+            if (attempt < maxRetries) {
+                console.warn(`Attempt ${attempt} failed. Retrying in ${delayMs}ms...`, err);
+                await new Promise((res) => global.setTimeout(res, delayMs));
+            } else {
+                console.warn(`Attempt ${attempt} failed (final attempt).`, err);
+            }
         }
     }
     console.error(error);
-    error.Message = humanError;
+    if (error != null && typeof error === 'object') {
+        error.Message = humanError;
+    }
     throw error;
 }

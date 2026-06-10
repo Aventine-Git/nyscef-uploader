@@ -22,17 +22,3 @@ export async function invokeLambda(functionName: string, data: any) {
     return result;
 }
 
-export async function invokeLambdaAsync(functionName: string, data: any) {
-    const payload = JSON.stringify(data);
-    console.log('Invoking Lambda function asynchronously:', functionName);
-
-    const command = new InvokeCommand({
-        FunctionName: functionName,
-        Payload: Buffer.from(payload),
-        InvocationType: 'Event', // Asynchronous invocation
-    });
-    const response = await lambda.send(command);
-    console.log('Asynchronous Lambda invocation response:', response);
-
-    return response;
-}

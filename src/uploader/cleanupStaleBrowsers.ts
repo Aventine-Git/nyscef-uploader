@@ -10,6 +10,6 @@ export async function cleanupStaleBrowsers(activeBrowsers: ChromiumBrowser[]) {
                 // already closed, ignore
             }
         }
-        activeBrowsers = [];
+        activeBrowsers.length = 0;
     }
 }

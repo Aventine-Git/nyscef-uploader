@@ -6,6 +6,7 @@ import { GmailMsg } from '../shared_helpers/types.js';
 import { putS3 } from '../shared_helpers/s3.js';
 import { mergePDFBuffers } from '../helpers/buffer.js';
 import { findFirstValidNegotiatorID } from '../helpers/negotiator.js';
+import { reportIncident } from '../shared_helpers/reporter.js';
 
 export async function emailSCARClerk(stips: Document[], realFrom: string, testing: boolean = false) {
     if (stips.length === 0) {
@@ -75,5 +76,6 @@ export async function emailSCARClerk(stips: Document[], realFrom: string, testin
         console.log(`Clerk email sent to ${testing ? 'catherine@aventine.ai' : `${clerkEmail} and ${realFrom} `}`, res);
     } catch (error) {
         console.error('Error sending clerk email:', error);
+        reportIncident('nyscef-uploader', 'emailSCARClerk', 'major', `Failed to send SCAR clerk email for county ${uploadedStips[0].county}: ${(error as any)?.message ?? String(error)}`).catch(console.error);
     }
 }
