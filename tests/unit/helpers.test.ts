@@ -71,7 +71,7 @@ describe('findFirstValidCountyCode', () => {
 describe('getCountyCodeMap', () => {
     it('fetches and returns the county code map', async () => {
         const map = { Westchester: 'WES', Suffolk: 'SUF' };
-        mockFetch.mockResolvedValueOnce({ json: async () => map } as any);
+        mockFetch.mockResolvedValueOnce({ ok: true, json: async () => map } as any);
         const result = await getCountyCodeMap();
         expect(result).toEqual(map);
         expect(mockFetch).toHaveBeenCalledWith('https://api.aventineproperties.com/counties');
