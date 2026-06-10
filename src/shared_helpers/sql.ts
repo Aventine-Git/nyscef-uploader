@@ -38,7 +38,7 @@ export async function executeSQLQuery(query: string, params: any[] = []): Promis
         const [results] = await connection.query(query, params);
         return results;
     } catch (error) {
-        console.error('Database query error for: ' + query, error);
+        console.error(`Database query error (${(error as any)?.code ?? 'UNKNOWN'}): ${(error as any)?.message ?? error}`);
         throw error;
     } finally {
         if (connection) connection.release();

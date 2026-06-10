@@ -24,14 +24,6 @@ export type GmailMsg = {
     requestId?: number;
 };
 
-export enum IngestStatus {
-    RECEIVED = 'Received',
-    PROCESSING = 'Processing',
-    UPLOADING = 'Uploading',
-    Done = 'Done',
-    FAILED = 'Failed',
-}
-
 export enum IngestItemStatus {
     QUEUED = 'Queued',
     SKIPPED = 'Skipped',
@@ -49,12 +41,6 @@ export enum IngestItemType {
     SALES_EVIDENCE = 'SalesEvidence',
     EQUITY_EVIDENCE = 'EquityEvidence',
     OTHER_EVIDENCE = 'OtherEvidence',
-}
-
-export enum IngestType {
-    NEGOTIATIONS = 'Negotiations',
-    STIPULATIONS = 'Stipulations',
-    EVIDENCE = 'Evidence',
 }
 
 export interface User {

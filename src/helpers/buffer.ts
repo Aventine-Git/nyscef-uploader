@@ -5,7 +5,7 @@ export async function streamToBuffer(stream: Readable): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
         const chunks: Buffer[] = [];
         stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-        stream.on('error', (err) => reject(err));
+        stream.on('error', (err) => { stream.destroy(); reject(err); });
         stream.on('end', () => resolve(Buffer.concat(chunks)));
     });
 }

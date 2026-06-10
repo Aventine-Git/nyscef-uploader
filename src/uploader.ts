@@ -142,11 +142,11 @@ export async function uploadToNyscef(documents: Document[], testing: boolean = f
                 // update database status
                 console.log(`✅ [DB UPDATE] Document ParcelID: ${doc.parcelID} NYSCEF Upload Status: ${doc.hasBeenUploaded}`);
                 if (doc.hasBeenUploaded) {
-                    await trackDocStatus(ingestID, doc, ingestItemType, IngestItemStatus.UPLOADED, 'Document successfully uploaded to NYSCEF');
                     if (testing) {
                         console.log(`⚠️ [TESTING MODE] Skipping DB update for ParcelID: ${doc.parcelID} due to testing mode.`);
                         continue;
                     }
+                    await trackDocStatus(ingestID, doc, ingestItemType, IngestItemStatus.UPLOADED, 'Document successfully uploaded to NYSCEF');
                     if (doc.type === DocumentType.STIPULATION) {
                         const updateQuery = `UPDATE StipTracking SET Status = 'NyscefUploaded', LastUpdateDate = NOW() WHERE ParcelID = ? AND Year = ?`;
                         await executeSQLQuery(updateQuery, [doc.parcelID, doc.year]);

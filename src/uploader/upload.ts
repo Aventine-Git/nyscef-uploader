@@ -48,23 +48,6 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
             await page.waitForURL('**/DocumentList**');
         }, 'Error navigating to case page');
 
-        // find the next evidence exhibit number for this case, starting from A, by looking at existing filings
-        const existingExhibits = await page.$$eval('a', (links) => {
-            return links
-                .filter((link) => link.textContent?.includes('EXHIBIT(S)'))
-                .map((link) => {
-                    const rowText = link.closest('tr')?.textContent ?? link.parentElement?.textContent ?? '';
-                    // skip numbered exhibits (- 1, - 2, etc.)
-                    if (/EXHIBIT\(S\)[\s\S]*?-\s*\d/.test(rowText)) return null;
-                    const match = rowText.match(/EXHIBIT\(S\)[\s\S]*?-\s*([A-Z])\b/);
-                    return match ? match[1] : null;
-                })
-                .filter((letter): letter is string => letter !== null);
-        });
-        console.log(`Existing exhibits for this case: ${existingExhibits.join(', ')}`);
-        const nextExhibitLetter = existingExhibits.length > 0 ? String.fromCharCode(existingExhibits.map((l) => l.charCodeAt(0)).reduce((a, b) => Math.max(a, b)) + 1) : 'A';
-        console.log(`Next exhibit letter to use: ${nextExhibitLetter}`);
-
         // now we're in the case page, click on "File Document" button
         console.log(`Navigating to filing page...`);
         await retry(async () => {
@@ -81,12 +64,33 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
 
         // select document type
         if (doc.type === DocumentType.EVIDENCE) {
+            // find the next evidence exhibit number for this case, starting from A, by looking at existing filings
+            const existingExhibits = await page.$$eval('a', (links) => {
+                return links
+                    .filter((link) => link.textContent?.includes('EXHIBIT(S)'))
+                    .map((link) => {
+                        const rowText = link.closest('tr')?.textContent ?? link.parentElement?.textContent ?? '';
+                        // skip numbered exhibits (- 1, - 2, etc.)
+                        if (/EXHIBIT\(S\)[\s\S]*?-\s*\d/.test(rowText)) return null;
+                        const match = rowText.match(/EXHIBIT\(S\)[\s\S]*?-\s*([A-Z])\b/);
+                        return match ? match[1] : null;
+                    })
+                    .filter((letter): letter is string => letter !== null);
+            });
+            console.log(`Existing exhibits for this case: ${existingExhibits.join(', ')}`);
+            const maxCharCode = existingExhibits.length > 0 ? existingExhibits.map((l) => l.charCodeAt(0)).reduce((a, b) => Math.max(a, b)) : 'A'.charCodeAt(0) - 1;
+            if (maxCharCode >= 'Z'.charCodeAt(0)) {
+                throw new Error(`Exhibit letters exhausted (A-Z) for scarID: ${doc.scarID}`);
+            }
+            const nextExhibitLetter = String.fromCharCode(maxCharCode + 1);
+            console.log(`Next exhibit letter to use: ${nextExhibitLetter}`);
+
             console.log(`Selecting evidence document type...`);
+            page.on('dialog', async (dialog) => {
+                console.log('Dialog message:', dialog.message());
+                await dialog.accept();
+            });
             await retry(async () => {
-                page.on('dialog', async (dialog) => {
-                    console.log('Dialog message:', dialog.message());
-                    await dialog.accept();
-                });
                 await page.selectOption('#selDocType_main_1', { label: NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT });
                 const exhibit = doc.identifier.toLowerCase() === 'excessive' ? EXHIBIT.EXCESSIVE : EXHIBIT.UNEQUAL;
                 await page.fill('#txtExhNumLet_1', nextExhibitLetter);

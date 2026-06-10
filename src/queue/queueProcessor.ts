@@ -71,22 +71,26 @@ async function notifyIfIngestComplete(ingestID: number | undefined, testing: boo
     // Batch clerk email — send once for all uploaded stips in this ingest
     const uploadedStipItems = items.filter((i) => i.Status === 'UPLOADED' && i.DocumentType === DocumentType.STIPULATION);
     if (uploadedStipItems.length > 0) {
-        const realFrom = uploadedStipItems[0].RealFrom ?? '';
-        const stipDocs = await Promise.all(uploadedStipItems.map(prepareFromQueueItem));
-        const docsWithStatus = stipDocs.map((doc) => ({ ...doc, hasBeenUploaded: true }));
-        await emailSCARClerk(docsWithStatus, realFrom, testing);
+        try {
+            const realFrom = uploadedStipItems[0].RealFrom ?? '';
+            const stipDocs = await Promise.all(uploadedStipItems.map(prepareFromQueueItem));
+            const docsWithStatus = stipDocs.map((doc) => ({ ...doc, hasBeenUploaded: true }));
+            await emailSCARClerk(docsWithStatus, realFrom, testing);
+        } catch (clerkErr) {
+            console.error('Failed to send batch clerk email:', clerkErr);
+        }
     }
 }
 
 async function processItem(item: QueueItem, notifyOnComplete = true): Promise<void> {
     await claimQueueItem(item.ID);
 
-    const doc = await prepareFromQueueItem(item);
     const testing = item.Testing;
     const ingestID = item.IngestID ?? undefined;
     const realFrom = item.RealFrom ?? '';
 
     try {
+        const doc = await prepareFromQueueItem(item);
         const output = await uploadToNyscef([doc], testing, ingestID, realFrom);
         if (output[0]?.wasSkipped) {
             console.log(`Queue item ID=${item.ID} already uploaded to NYSCEF — marking SKIPPED.`);
@@ -100,7 +104,9 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
         }
         await handleWithdrawals(output, testing);
     } catch (error: any) {
-        await markFailed(item.ID, error.message);
+        try { await markFailed(item.ID, error.message); } catch (dbErr) {
+            console.error('Failed to mark item as failed:', dbErr);
+        }
         // item.Attempts is the pre-claim value; claimQueueItem already incremented it by 1.
         // Only fire an incident once all retries are exhausted — transient failures
         // (Cloudflare blocks, network blips) should resolve on a later attempt without noise.
@@ -125,7 +131,18 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
 
 export async function processSQSRecords(records: any[]): Promise<void> {
     for (const record of records) {
-        const { id } = JSON.parse(record.body) as { id: number };
+        let id: number | undefined;
+        try {
+            const parsed = JSON.parse(record.body) as { id?: number };
+            id = typeof parsed.id === 'number' ? parsed.id : undefined;
+        } catch {
+            console.error(`Unparseable SQS record body: ${record.body}`);
+            continue;
+        }
+        if (!id) {
+            console.error(`SQS record missing numeric id: ${record.body}`);
+            continue;
+        }
         const item = await getQueueItemById(id);
         if (!item) {
             console.log(`Queue item ID=${id} not found or not in QUEUED/FAILED state — skipping.`);
@@ -164,7 +181,7 @@ export async function forceRetryExhaustedItems(): Promise<void> {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
             reportIncident(
-                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'nyscef-uploader',
                 'notifyIfIngestComplete',
                 'major',
                 `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
@@ -201,7 +218,7 @@ export async function forceRetryAllItems(): Promise<void> {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
             reportIncident(
-                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'nyscef-uploader',
                 'notifyIfIngestComplete',
                 'major',
                 `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
@@ -243,7 +260,7 @@ export async function retryFailedItems(): Promise<void> {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
             reportIncident(
-                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'nyscef-uploader',
                 'notifyIfIngestComplete',
                 'major',
                 `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
