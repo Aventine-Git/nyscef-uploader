@@ -4,6 +4,7 @@ import { emailSCARClerk } from '../emailer/emailSCARClerk.js';
 import { notifyResults } from '../emailer/notifyResults.js';
 import { handleWithdrawals } from '../helpers/withdrawals.js';
 import { prepareFromQueueItem } from '../preparer/prepareFromQueueItem.js';
+import { reportIncident } from '../shared_helpers/reporter.js';
 import { Document, DocumentType } from '../types.js';
 import {
     QueueItem,
@@ -111,6 +112,12 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
         if (notifyOnComplete) {
             await notifyIfIngestComplete(ingestID, testing).catch((e) => {
                 console.error('Error in notifyIfIngestComplete:', e);
+                reportIncident(
+                    'nyscef-uploader',
+                    'notifyIfIngestComplete',
+                    'major',
+                    `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
+                ).catch((re) => console.error('Failed to report notification incident:', re));
             });
         }
     }
@@ -156,6 +163,12 @@ export async function forceRetryExhaustedItems(): Promise<void> {
     for (const ingestID of ingestIDs) {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
+            reportIncident(
+                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'notifyIfIngestComplete',
+                'major',
+                `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
+            ).catch((re) => console.error('Failed to report notification incident:', re));
         });
     }
 }
@@ -187,6 +200,12 @@ export async function forceRetryAllItems(): Promise<void> {
     for (const ingestID of ingestIDs) {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
+            reportIncident(
+                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'notifyIfIngestComplete',
+                'major',
+                `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
+            ).catch((re) => console.error('Failed to report notification incident:', re));
         });
     }
 }
@@ -223,6 +242,12 @@ export async function retryFailedItems(): Promise<void> {
     for (const ingestID of ingestIDs) {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
+            reportIncident(
+                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'notifyIfIngestComplete',
+                'major',
+                `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
+            ).catch((re) => console.error('Failed to report notification incident:', re));
         });
     }
 }

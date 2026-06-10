@@ -6,7 +6,7 @@ export async function invokeLambda(functionName: string, data: any) {
     const payload = JSON.stringify(data);
 
     console.log('Invoking Lambda function:', functionName);
-    console.log('Payload:', payload);
+    // console.log('Payload:', payload);
 
     const command = new InvokeCommand({
         FunctionName: functionName,
