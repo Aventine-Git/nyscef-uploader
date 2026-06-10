@@ -181,7 +181,7 @@ export async function forceRetryExhaustedItems(): Promise<void> {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
             reportIncident(
-                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'nyscef-uploader',
                 'notifyIfIngestComplete',
                 'major',
                 `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
@@ -218,7 +218,7 @@ export async function forceRetryAllItems(): Promise<void> {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
             reportIncident(
-                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'nyscef-uploader',
                 'notifyIfIngestComplete',
                 'major',
                 `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
@@ -260,7 +260,7 @@ export async function retryFailedItems(): Promise<void> {
         await notifyIfIngestComplete(ingestID, testingByIngest.get(ingestID) ?? false).catch((e) => {
             console.error(`Error notifying IngestID=${ingestID}:`, e);
             reportIncident(
-                process.env.AWS_LAMBDA_FUNCTION_NAME ?? 'nyscef-uploader',
+                'nyscef-uploader',
                 'notifyIfIngestComplete',
                 'major',
                 `Failed to send ingest notification for IngestID=${ingestID}: ${e?.message ?? String(e)}`
