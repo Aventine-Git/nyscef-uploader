@@ -1,0 +1,48 @@
+# Third-party dependencies
+**/node_modules/
+
+# Compiled output (TypeScript source is the canonical version)
+**/dist/
+**/build/
+
+# Source maps
+**/*.js.map
+
+# Deployment artifacts
+**/*.zip
+**/*.tgz
+
+# Environment / secrets
+**/.env
+**/.env.*
+
+# Binary assets
+**/*.ttf
+**/*.otf
+**/*.woff
+**/*.woff2
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.pdf
+**/*.ico
+
+# Lock files (large, low signal)
+**/package-lock.json
+**/yarn.lock
+
+# Test output
+**/test-output/
+**/test-output.pdf
+**/coverage/
+**/.nyc_output/
+
+# Logs
+**/*.log
+**/logs/
+
+# OS / IDE
+**/.DS_Store
+**/Thumbs.db
+**/.idea/

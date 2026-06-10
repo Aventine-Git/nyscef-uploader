@@ -1,0 +1,15 @@
+services:
+  nyscef-uploader:
+    build:
+      context: ..
+      dockerfile: nyscef-uploader/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    # Give the container a /tmp with more space for Chromium profile dirs
+    tmpfs:
+      - /tmp:size=512m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"

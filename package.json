@@ -1,0 +1,47 @@
+{
+    "name": "nyscef-uploader",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "type": "module",
+    "scripts": {
+        "build-prod": "tsc && node ../_SHARED/scripts/fix-imports.mjs && npm prune --production",
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "lint": "eslint",
+        "test": "vitest run",
+        "test:e2e": "tsc && npx playwright test upload.spec.ts",
+        "test-ui": "tsc && npx playwright test --ui",
+        "test-invoke": "tsc && npx playwright test invoke.spec.ts",
+        "test-queue": "tsc && npx playwright test queue.spec.ts",
+        "test-upload": "tsc && npx playwright test upload.spec.ts"
+    },
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "@aws-sdk/client-sqs": "^3.931.0",
+        "@sparticuz/chromium": "^141.0.0",
+        "dotenv": "^17.2.3",
+        "mysql2": "^3.15.3",
+        "node-fetch": "^3.3.2",
+        "pdf-lib": "^1.17.1",
+        "playwright-core": "^1.56.1",
+        "playwright-extra": "^4.3.6",
+        "puppeteer-extra-plugin-stealth": "^2.11.2"
+    },
+    "devDependencies": {
+        "@aws-sdk/client-lambda": "^3.931.0",
+        "@aws-sdk/client-s3": "^3.919.0",
+        "@playwright/test": "^1.56.1",
+        "@types/node": "^24.10.1",
+        "@typescript-eslint/eslint-plugin": "^8.46.1",
+        "@typescript-eslint/parser": "^8.46.1",
+        "eslint": "^9.37.0",
+        "eslint-config-problems": "^9.0.0",
+        "tsx": "^4.20.6",
+        "typescript": "^5.9.3",
+        "vite-tsconfig-paths": "^5.0.0",
+        "vitest": "^2.0.0",
+        "esbuild": "^0.25.0"
+    }
+}
