@@ -5,6 +5,7 @@ import { notifyResults } from '../emailer/notifyResults.js';
 import { handleWithdrawals } from '../helpers/withdrawals.js';
 import { prepareFromQueueItem } from '../preparer/prepareFromQueueItem.js';
 import { reportIncident } from '../shared_helpers/reporter.js';
+import { recordUploadSuccess, recordUploadFailure } from '../helpers/uploadHealth.js';
 import { Document, DocumentType } from '../types.js';
 import {
     QueueItem,
@@ -98,6 +99,7 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
         } else {
             await markUploaded(item.ID);
         }
+        recordUploadSuccess(); // upload pipeline is healthy — reset the failure streak
         if (!ingestID) {
             // Legacy SQS items without an IngestID — email clerk immediately (no batching possible)
             await emailSCARClerk(output, realFrom, testing);
@@ -113,6 +115,9 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
         if (item.Attempts + 1 < MAX_ATTEMPTS) {
             error.noReport = true;
         }
+        // The worker has no handler wrapper to raise incidents, so track consecutive
+        // failures here and page once when uploads are systemically broken.
+        recordUploadFailure(`ParcelID ${item.ParcelID}: ${error.message}`);
         throw error;
     } finally {
         if (notifyOnComplete) {
