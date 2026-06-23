@@ -7,6 +7,7 @@ import * as tracker from './shared_helpers/ingestTracking.js';
 import { IngestItemStatus, IngestItemType } from './shared_helpers/types.js';
 import dotenv from 'dotenv';
 import { retry } from './helpers/retry.js';
+import { Mutex } from './helpers/mutex.js';
 import { addBrowser } from './uploader/addBrowser.js';
 import { CloudflareBlockError } from './errors.js';
 import { cleanupStaleBrowsers } from './uploader/cleanupStaleBrowsers.js';
@@ -22,6 +23,11 @@ playwright.use(stealth());
 // NYSCEF session rather than logging in (and triggering Cloudflare) on every invocation.
 let activeBrowsers: ChromiumBrowser[] = [];
 let activeContext: Awaited<ReturnType<typeof addBrowser>> | undefined = undefined;
+
+// The worker runs the SQS poll loop and the 15-minute retry scheduler concurrently
+// (worker.ts), and both drive the browser singleton above. Serialize every entry point
+// that touches it so one chain never tears the browser down while another is mid-upload.
+const browserMutex = new Mutex();
 
 // Returns an existing browser context if the browser is still connected,
 // otherwise cleans up and creates a fresh one (with full Cloudflare login).
@@ -59,15 +65,22 @@ async function trackDocStatus(ingestID: number | undefined, doc: Document, itemT
 }
 
 export async function testLogin(): Promise<void> {
-    await cleanupStaleBrowsers(activeBrowsers);
-    const browsers: ChromiumBrowser[] = [];
-    activeBrowsers = browsers;
-    const context = await addBrowser(browsers);
-    activeContext = context;
-    console.log('🧪 Login test successful — browser context is warm and ready');
+    return browserMutex.runExclusive(async () => {
+        await cleanupStaleBrowsers(activeBrowsers);
+        const browsers: ChromiumBrowser[] = [];
+        activeBrowsers = browsers;
+        const context = await addBrowser(browsers);
+        activeContext = context;
+        console.log('🧪 Login test successful — browser context is warm and ready');
+    });
 }
 
 export async function uploadToNyscef(documents: Document[], testing: boolean = false, ingestID: number | undefined, realFrom: string): Promise<Document[]> {
+    // Serialized against the concurrent retry scheduler / poll loop — see browserMutex above.
+    return browserMutex.runExclusive(() => uploadToNyscefLocked(documents, testing, ingestID, realFrom));
+}
+
+async function uploadToNyscefLocked(documents: Document[], testing: boolean = false, ingestID: number | undefined, realFrom: string): Promise<Document[]> {
     console.log(
         'Starting upload to NYSCEF for documents:',
         documents.map((s) => s.parcelID)
