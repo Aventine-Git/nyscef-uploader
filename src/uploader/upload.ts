@@ -118,7 +118,9 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
                 buffer: doc.docBuffer,
             });
             await page.waitForTimeout(1000); // wait for upload to register
-            await page.click('#btnNext');
+            // Clicking Next submits the multi-MB PDF; the POST + navigation routinely
+            // exceeds the 5s default nav timeout, so give this submit a real budget.
+            await page.click('#btnNext', { timeout: 60000 });
         }, 'Error uploading document file');
 
         // submit filing
@@ -128,7 +130,7 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
             if (testing) {
                 console.log('Testing mode enabled - skipping final submission.');
             } else {
-                await page.click('#btnSubmit');
+                await page.click('#btnSubmit', { timeout: 60000 });
                 await page.waitForTimeout(2000);
             }
             doc.hasBeenUploaded = true;
