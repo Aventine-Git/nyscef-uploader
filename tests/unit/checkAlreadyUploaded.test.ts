@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../../../_SHARED/dist/sql.js', () => ({
+vi.mock('../../src/shared_helpers/sql.js', () => ({
     executeSQLQuery: vi.fn(),
     getUserDetails: vi.fn().mockResolvedValue(null),
 }));
 
-import { executeSQLQuery } from '../../../_SHARED/dist/sql.js';
+import { executeSQLQuery } from '../../src/shared_helpers/sql.js';
 import { checkAlreadyUploaded } from '../../src/uploader/checkAlreadyUploaded.ts';
 import { Document, DocumentType } from '../../src/types.ts';
 

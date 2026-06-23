@@ -1,6 +1,7 @@
-import { putS3 } from '@shared/s3.js';
+import { putS3 } from '../shared_helpers/s3.js';
 import { Document, DocumentType } from '../types.js';
-import { executeSQLQuery } from '@shared/sql.js';
+import { executeSQLQuery } from '../shared_helpers/sql.js';
+import { reportIncident } from '../shared_helpers/reporter.js';
 
 export async function handleWithdrawals(docs: Document[], testing: boolean = false) {
     for (const doc of docs) {
@@ -18,6 +19,7 @@ export async function handleWithdrawals(docs: Document[], testing: boolean = fal
             console.log(`Updated withdrawal status in database for ParcelID: ${doc.parcelID}, Rows affected: ${rowsUpdated}`);
         } catch (error) {
             console.error(`Error processing withdrawal for ParcelID: ${doc.parcelID}:`, error);
+            reportIncident('nyscef-uploader', 'handleWithdrawals', 'major', `Failed to process withdrawal for ParcelID ${doc.parcelID}: ${error instanceof Error ? error.message : String(error)}`).catch(console.error);
         }
     }
 }

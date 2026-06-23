@@ -1,4 +1,4 @@
-import { executeSQLQuery } from '@shared/sql.js';
+import { executeSQLQuery } from '../shared_helpers/sql.js';
 import { Document, DocumentType } from '../types.js';
 
 export async function checkAlreadyUploaded(doc: Document, realFrom: string): Promise<boolean> {

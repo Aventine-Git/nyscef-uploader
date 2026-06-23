@@ -2,9 +2,9 @@ import type { ChromiumBrowser, Page } from 'playwright-core'; // Only for type c
 import { chromium as playwright } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
 import { Document, DocumentType } from './types.js';
-import { executeSQLQuery } from '@shared/sql.js';
-import * as tracker from '@shared/ingestTracking.js';
-import { IngestItemStatus, IngestItemType } from '@shared/types.js';
+import { executeSQLQuery } from './shared_helpers/sql.js';
+import * as tracker from './shared_helpers/ingestTracking.js';
+import { IngestItemStatus, IngestItemType } from './shared_helpers/types.js';
 import dotenv from 'dotenv';
 import { retry } from './helpers/retry.js';
 import { addBrowser } from './uploader/addBrowser.js';
@@ -142,11 +142,11 @@ export async function uploadToNyscef(documents: Document[], testing: boolean = f
                 // update database status
                 console.log(`✅ [DB UPDATE] Document ParcelID: ${doc.parcelID} NYSCEF Upload Status: ${doc.hasBeenUploaded}`);
                 if (doc.hasBeenUploaded) {
-                    await trackDocStatus(ingestID, doc, ingestItemType, IngestItemStatus.UPLOADED, 'Document successfully uploaded to NYSCEF');
                     if (testing) {
                         console.log(`⚠️ [TESTING MODE] Skipping DB update for ParcelID: ${doc.parcelID} due to testing mode.`);
                         continue;
                     }
+                    await trackDocStatus(ingestID, doc, ingestItemType, IngestItemStatus.UPLOADED, 'Document successfully uploaded to NYSCEF');
                     if (doc.type === DocumentType.STIPULATION) {
                         const updateQuery = `UPDATE StipTracking SET Status = 'NyscefUploaded', LastUpdateDate = NOW() WHERE ParcelID = ? AND Year = ?`;
                         await executeSQLQuery(updateQuery, [doc.parcelID, doc.year]);

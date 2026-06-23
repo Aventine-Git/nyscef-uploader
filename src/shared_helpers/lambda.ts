@@ -6,7 +6,7 @@ export async function invokeLambda(functionName: string, data: any) {
     const payload = JSON.stringify(data);
 
     console.log('Invoking Lambda function:', functionName);
-    console.log('Payload:', payload);
+    // console.log('Payload:', payload);
 
     const command = new InvokeCommand({
         FunctionName: functionName,
@@ -19,20 +19,24 @@ export async function invokeLambda(functionName: string, data: any) {
     const result = response.Payload ? JSON.parse(Buffer.from(response.Payload).toString()) : null;
     console.log('Lambda response:', result);
 
+    // Unhandled exception inside the invoked function
+    if (response.FunctionError) {
+        const msg = result?.errorMessage ?? response.FunctionError;
+        throw new Error(`Lambda '${functionName}' function error: ${msg}`);
+    }
+
+    // Application-level HTTP error (e.g. { statusCode: 400, body: '{"error":"..."}' })
+    if (result?.statusCode >= 400) {
+        let detail: string;
+        try {
+            const body = typeof result.body === 'string' ? JSON.parse(result.body) : result.body;
+            detail = body?.error ?? body?.message ?? JSON.stringify(body);
+        } catch {
+            detail = String(result.body ?? result.statusCode);
+        }
+        throw new Error(`Lambda '${functionName}' returned ${result.statusCode}: ${detail}`);
+    }
+
     return result;
 }
 
-export async function invokeLambdaAsync(functionName: string, data: any) {
-    const payload = JSON.stringify(data);
-    console.log('Invoking Lambda function asynchronously:', functionName);
-
-    const command = new InvokeCommand({
-        FunctionName: functionName,
-        Payload: Buffer.from(payload),
-        InvocationType: 'Event', // Asynchronous invocation
-    });
-    const response = await lambda.send(command);
-    console.log('Asynchronous Lambda invocation response:', response);
-
-    return response;
-}

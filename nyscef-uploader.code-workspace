@@ -1,30 +1,25 @@
 {
     "folders": [
         {
-            "name": "nyscef-uploader",
-            "path": "."
+            "path": ".",
         },
-        {
-            "name": "_SHARED (lambdas)",
-            "path": "../lambdas/_SHARED"
-        }
     ],
     "settings": {
-        "search.exclude": {
-            "**/node_modules": true,
-            "**/dist": true,
-            "**/test-results": true,
-            "**/coverage": true
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[typescript]": {
+            "editor.defaultFormatter": "esbenp.prettier-vscode",
         },
-        "files.watcherExclude": {
-            "**/node_modules/**": true,
-            "**/dist/**": true
-        }
+        "files.exclude": {
+            "node_modules": true,
+            "dist": true,
+            "test-results": true,
+        },
+        "search.exclude": {
+            "node_modules": true,
+            "dist": true,
+            "package-lock.json": true,
+        },
     },
-    "extensions": {
-        "recommendations": [
-            "dbaeumer.vscode-eslint",
-            "esbenp.prettier-vscode"
-        ]
-    }
 }

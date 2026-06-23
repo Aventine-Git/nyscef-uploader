@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Shim withErrorReporting — same pattern as other lambdas
-vi.mock('../../../_SHARED/dist/handlerWrapper.js', () => ({
+vi.mock('../../src/shared_helpers/handlerWrapper.js', () => ({
     withErrorReporting: (fn: (...args: any[]) => Promise<any>) => async (event: any, context: any) => {
         try {
             return await fn(event, context);
@@ -11,7 +11,7 @@ vi.mock('../../../_SHARED/dist/handlerWrapper.js', () => ({
     },
 }));
 
-vi.mock('../../../_SHARED/dist/lambda.js', () => ({
+vi.mock('../../src/shared_helpers/lambda.js', () => ({
     invokeLambda: vi.fn().mockResolvedValue(undefined),
 }));
 

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { DocInputData, Document, DocumentType, EventInput } from './types.js';
-import { getS3, listS3 } from '@shared/s3.js';
+import { getS3, listS3 } from './shared_helpers/s3.js';
 import { Readable } from 'stream';
 import { streamToBuffer } from './helpers/buffer.js';
 import { getCountyCodeMap } from './helpers/countyCode.js';

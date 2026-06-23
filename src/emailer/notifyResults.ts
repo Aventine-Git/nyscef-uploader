@@ -1,12 +1,13 @@
-import { invokeLambda } from '@shared/lambda.js';
-import { getUserDetails } from '@shared/sql.js';
-import { User, NotifierMsg } from '@shared/types.js';
+import { invokeLambda } from '../shared_helpers/lambda.js';
+import { getUserDetails } from '../shared_helpers/sql.js';
+import { User, NotifierMsg } from '../shared_helpers/types.js';
 import { findFirstValidCountyCode } from '../helpers/countyCode.js';
 import { findFirstValidNegotiatorID } from '../helpers/negotiator.js';
 import { uploadScreenshotToS3 } from '../helpers/screenshot.js';
 import { formatDataTable } from './formatDataTable.js';
 import { Document, DocumentType } from '../types.js';
 import getCourtDate from './getCourtDate.js';
+import { reportIncident } from '../shared_helpers/reporter.js';
 
 export async function notifyResults(result: string, documents: Document[], failedDoc?: Document, screenshot?: Buffer, testing: boolean = false, isError: boolean = false, wasRetried: boolean = false) {
     const negotiatorID = findFirstValidNegotiatorID(documents);
@@ -97,5 +98,6 @@ export async function notifyResults(result: string, documents: Document[], faile
         return res;
     } catch (error) {
         console.error('Error sending notification:', error);
+        reportIncident('nyscef-uploader', 'notifyResults', 'major', `Failed to send upload notification: ${error instanceof Error ? error.message : String(error)}`).catch(console.error);
     }
 }
