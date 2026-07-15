@@ -14,7 +14,8 @@ export interface QueueItem {
     NegotiatorID: number | null;
     IsVillage: boolean;
     DocumentType: DocumentType;
-    Identifier: string; // disposition code for stipulations, evidence type for evidence
+    Identifier: string; // disposition code for stipulations, evidence type for evidence, NYSCEF doc-type code for misc
+    Description: string | null; // NYSCEF document description; used when filing misc docs as EXHIBIT(S)
     Status: 'QUEUED' | 'PROCESSING' | 'UPLOADED' | 'FAILED' | 'SKIPPED';
     Attempts: number;
     ErrorMessage: string | null;

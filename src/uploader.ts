@@ -1,7 +1,7 @@
 import type { ChromiumBrowser, Page } from 'playwright-core'; // Only for type checking
 import { chromium as playwright } from 'playwright-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
-import { Document, DocumentType } from './types.js';
+import { Document, DocumentType, isArbitraryMiscDoc } from './types.js';
 import { executeSQLQuery } from './shared_helpers/sql.js';
 import * as tracker from './shared_helpers/ingestTracking.js';
 import { IngestItemStatus, IngestItemType } from './shared_helpers/types.js';
@@ -172,10 +172,17 @@ async function uploadToNyscefLocked(documents: Document[], testing: boolean = fa
                         const capitalizedIdentifier = doc.identifier.charAt(0).toUpperCase() + doc.identifier.slice(1);
                         await executeSQLQuery(updateQuery, [doc.parcelID, doc.year, doc.scarID, capitalizedIdentifier, capitalizedIdentifier]);
                     } else if (doc.type === DocumentType.MISC) {
-                        const updateQuery = `INSERT INTO Court.UploadedLetters (ParcelID, Year, SCARIndexNumber, UploadDate)
+                        if (isArbitraryMiscDoc(doc)) {
+                            const updateQuery = `INSERT INTO Court.UploadedMiscDocs (ParcelID, Year, SCARIndexNumber, DocType, S3Key, UploadDate)
+                     VALUES (?, ?, ?, ?, ?, NOW())
+                     ON DUPLICATE KEY UPDATE UploadDate = NOW()`;
+                            await executeSQLQuery(updateQuery, [doc.parcelID, doc.year, doc.scarID, doc.identifier, doc.s3Key]);
+                        } else {
+                            const updateQuery = `INSERT INTO Court.UploadedLetters (ParcelID, Year, SCARIndexNumber, UploadDate)
                      VALUES (?, ?, ?, NOW())
                      ON DUPLICATE KEY UPDATE UploadDate = NOW()`;
-                        await executeSQLQuery(updateQuery, [doc.parcelID, doc.year, doc.scarID]);
+                            await executeSQLQuery(updateQuery, [doc.parcelID, doc.year, doc.scarID]);
+                        }
                     }
                 }
             } catch (error: any) {

@@ -1,5 +1,5 @@
 import { executeSQLQuery } from '../shared_helpers/sql.js';
-import { Document, DocumentType } from '../types.js';
+import { Document, DocumentType, isArbitraryMiscDoc } from '../types.js';
 
 export async function checkAlreadyUploaded(doc: Document, realFrom: string): Promise<boolean> {
     console.log(`Checking if document has already been uploaded for ParcelID: ${doc.parcelID}, Year: ${doc.year}`);
@@ -40,11 +40,25 @@ export async function checkAlreadyUploaded(doc: Document, realFrom: string): Pro
             }
         }
     } else if (doc.type === DocumentType.MISC) {
-        const checkQuery = `SELECT ParcelID FROM Court.UploadedLetters WHERE ParcelID = ? AND Year = ?`;
-        const result = (await executeSQLQuery(checkQuery, [doc.parcelID, doc.year])) as Array<{ ParcelID: string }>;
-        if (result && result.length > 0) {
-            console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} - Letter already uploaded`);
-            return true;
+        if (isArbitraryMiscDoc(doc)) {
+            // Arbitrary misc documents dedup by the specific file AND the doc type it was filed under,
+            // so distinct documents (e.g. multiple exhibits) for the same parcel/year still upload, and
+            // the same file filed under two different NYSCEF types counts as two distinct filings.
+            // S3Key is content-derived upstream, so a corrected re-send is a new key and re-uploads.
+            const checkQuery = `SELECT ID FROM Court.UploadedMiscDocs WHERE ParcelID = ? AND Year = ? AND S3Key = ? AND DocType = ?`;
+            const result = (await executeSQLQuery(checkQuery, [doc.parcelID, doc.year, doc.s3Key, doc.identifier])) as Array<{ ID: number }>;
+            if (result && result.length > 0) {
+                console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} - Misc document (S3Key: ${doc.s3Key}, DocType: ${doc.identifier}) already uploaded`);
+                return true;
+            }
+        } else {
+            // Legacy letters (and legacy direct-invoke misc docs) dedup by parcel/year.
+            const checkQuery = `SELECT ParcelID FROM Court.UploadedLetters WHERE ParcelID = ? AND Year = ?`;
+            const result = (await executeSQLQuery(checkQuery, [doc.parcelID, doc.year])) as Array<{ ParcelID: string }>;
+            if (result && result.length > 0) {
+                console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} - Letter already uploaded`);
+                return true;
+            }
         }
     }
     return false;
