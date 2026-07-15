@@ -34,6 +34,71 @@ function getStipDocType(doc: Document): string {
     }
 }
 
+// Miscellaneous doc-type code (stored in NyscefUploadQueue.Identifier) -> NYSCEF dropdown label.
+// IMPORTANT: keep the key set in sync with MISC_DOC_TYPES in evidence-ingest/src/types.ts.
+// The legacy `letter` identifier (lower-case) maps to LETTER via the .toUpperCase() in resolveMiscDocType.
+const MISC_CODE_TO_LABEL: Record<string, string> = {
+    EXHIBIT: NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT,
+    LETTER: NYSCEF_DOC_TYPES.LETTER,
+};
+
+// Resolves a MISC document's NYSCEF label from its identifier code, defaulting to EXHIBIT(S)
+// for any code we don't recognize (per product requirement: misc files default to exhibits).
+export function resolveMiscDocType(doc: Document): string {
+    const code = doc.identifier.trim().toUpperCase();
+    const label = MISC_CODE_TO_LABEL[code];
+    if (label) return label;
+
+    // A non-empty but unmapped code almost always means the allowlist drifted: someone added a code
+    // to MISC_DOC_TYPES in evidence-ingest without adding it to MISC_CODE_TO_LABEL here. We still
+    // default to EXHIBIT(S) rather than failing the filing, but say so loudly — otherwise the
+    // document is filed with the court under the wrong type with no signal at all.
+    if (code !== '') {
+        console.warn(
+            `⚠️ Unmapped misc doc-type code '${code}' for ParcelID ${doc.parcelID} — filing as ` +
+                `${NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT}. Add it to MISC_CODE_TO_LABEL (upload.ts) to keep it ` +
+                `in sync with MISC_DOC_TYPES in evidence-ingest/src/types.ts.`
+        );
+    }
+    return NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT;
+}
+
+// Files the document as an EXHIBIT(S): scrapes existing exhibits to pick the next letter (A, B, C…),
+// selects the exhibit doc type, and fills the exhibit-letter + description fields. Shared by the
+// EVIDENCE path (description from the report type) and the MISC-as-exhibit path (caller description).
+async function selectExhibitDocType(page: Page, doc: Document, description: string): Promise<void> {
+    // find the next evidence exhibit number for this case, starting from A, by looking at existing filings
+    const existingExhibits = await page.$$eval('a', (links) => {
+        return links
+            .filter((link) => link.textContent?.includes('EXHIBIT(S)'))
+            .map((link) => {
+                const rowText = link.closest('tr')?.textContent ?? link.parentElement?.textContent ?? '';
+                // skip numbered exhibits (- 1, - 2, etc.)
+                if (/EXHIBIT\(S\)[\s\S]*?-\s*\d/.test(rowText)) return null;
+                const match = rowText.match(/EXHIBIT\(S\)[\s\S]*?-\s*([A-Z])\b/);
+                return match ? match[1] : null;
+            })
+            .filter((letter): letter is string => letter !== null);
+    });
+    console.log(`Existing exhibits for this case: ${existingExhibits.join(', ')}`);
+    const maxCharCode = existingExhibits.length > 0 ? existingExhibits.map((l) => l.charCodeAt(0)).reduce((a, b) => Math.max(a, b)) : 'A'.charCodeAt(0) - 1;
+    if (maxCharCode >= 'Z'.charCodeAt(0)) {
+        throw new Error(`Exhibit letters exhausted (A-Z) for scarID: ${doc.scarID}`);
+    }
+    const nextExhibitLetter = String.fromCharCode(maxCharCode + 1);
+    console.log(`Next exhibit letter to use: ${nextExhibitLetter}`);
+
+    page.on('dialog', async (dialog) => {
+        console.log('Dialog message:', dialog.message());
+        await dialog.accept();
+    });
+    await retry(async () => {
+        await page.selectOption('#selDocType_main_1', { label: NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT });
+        await page.fill('#txtExhNumLet_1', nextExhibitLetter);
+        await page.fill('#txtDocDes_1', description);
+    }, 'Error selecting exhibit document type');
+}
+
 export async function upload(page: Page, doc: Document, testing: boolean = false) {
     try {
         // Navigate to the case using stip data
@@ -69,48 +134,26 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
 
         // select document type
         if (doc.type === DocumentType.EVIDENCE) {
-            // find the next evidence exhibit number for this case, starting from A, by looking at existing filings
-            const existingExhibits = await page.$$eval('a', (links) => {
-                return links
-                    .filter((link) => link.textContent?.includes('EXHIBIT(S)'))
-                    .map((link) => {
-                        const rowText = link.closest('tr')?.textContent ?? link.parentElement?.textContent ?? '';
-                        // skip numbered exhibits (- 1, - 2, etc.)
-                        if (/EXHIBIT\(S\)[\s\S]*?-\s*\d/.test(rowText)) return null;
-                        const match = rowText.match(/EXHIBIT\(S\)[\s\S]*?-\s*([A-Z])\b/);
-                        return match ? match[1] : null;
-                    })
-                    .filter((letter): letter is string => letter !== null);
-            });
-            console.log(`Existing exhibits for this case: ${existingExhibits.join(', ')}`);
-            const maxCharCode = existingExhibits.length > 0 ? existingExhibits.map((l) => l.charCodeAt(0)).reduce((a, b) => Math.max(a, b)) : 'A'.charCodeAt(0) - 1;
-            if (maxCharCode >= 'Z'.charCodeAt(0)) {
-                throw new Error(`Exhibit letters exhausted (A-Z) for scarID: ${doc.scarID}`);
-            }
-            const nextExhibitLetter = String.fromCharCode(maxCharCode + 1);
-            console.log(`Next exhibit letter to use: ${nextExhibitLetter}`);
-
             console.log(`Selecting evidence document type...`);
-            page.on('dialog', async (dialog) => {
-                console.log('Dialog message:', dialog.message());
-                await dialog.accept();
-            });
-            await retry(async () => {
-                await page.selectOption('#selDocType_main_1', { label: NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT });
-                const exhibit = doc.identifier.toLowerCase() === 'excessive' ? EXHIBIT.EXCESSIVE : EXHIBIT.UNEQUAL;
-                await page.fill('#txtExhNumLet_1', nextExhibitLetter);
-                await page.fill('#txtDocDes_1', exhibit.description);
-            }, 'Error uploading evidence document');
+            const exhibit = doc.identifier.toLowerCase() === 'excessive' ? EXHIBIT.EXCESSIVE : EXHIBIT.UNEQUAL;
+            await selectExhibitDocType(page, doc, exhibit.description);
         } else if (doc.type === DocumentType.STIPULATION) {
             console.log(`Selecting stipulation document type...`);
             await retry(async () => {
                 await page.selectOption('#selDocType_main_1', { label: getStipDocType(doc) });
             }, 'Error selecting document type for stipulation');
         } else if (doc.type === DocumentType.MISC) {
-            console.log(`Selecting miscellaneous document type...`);
-            await retry(async () => {
-                await page.selectOption('#selDocType_main_1', { label: NYSCEF_DOC_TYPES.LETTER });
-            }, 'Error selecting document type for miscellaneous document');
+            const miscLabel = resolveMiscDocType(doc);
+            console.log(`Selecting miscellaneous document type: ${miscLabel}`);
+            if (miscLabel === NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT) {
+                // Misc files default to EXHIBIT(S) — reuse the exhibit-numbering path with the
+                // caller-supplied description (fall back to a generic label if none provided).
+                await selectExhibitDocType(page, doc, doc.description?.trim() || 'Exhibit');
+            } else {
+                await retry(async () => {
+                    await page.selectOption('#selDocType_main_1', { label: miscLabel });
+                }, 'Error selecting document type for miscellaneous document');
+            }
         } else {
             throw new Error('Unknown document type for upload.');
         }
