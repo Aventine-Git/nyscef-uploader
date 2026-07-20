@@ -58,6 +58,7 @@ async function buildDocumentsFromInput(d: DocInputData, forceUpload: boolean): P
         isVillage: d.isVillage,
         description: null,
         s3Key: '', // legacy direct path has no queue row; misc dedup does not apply here
+        exhibitLabelMode: null, // legacy direct path carries no override; labels resolve automatically
         hasBeenUploaded: false,
         wasSkipped: false,
         forceUpload,

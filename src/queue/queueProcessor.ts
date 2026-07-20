@@ -51,6 +51,7 @@ async function notifyIfIngestComplete(ingestID: number | undefined, testing: boo
         identifier: item.Identifier,
         description: item.Description ?? null,
         s3Key: item.S3Key,
+        exhibitLabelMode: null, // notification-only projection; nothing is filed from these Documents
         hasBeenUploaded: item.Status === 'UPLOADED' || item.Status === 'SKIPPED',
         wasSkipped: item.Status === 'SKIPPED',
         forceUpload: item.ForceUpload,

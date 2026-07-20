@@ -11,9 +11,26 @@ export interface Document {
     identifier: string; // disposition for stipulations, evidence type for evidence, or NYSCEF doc-type code for misc
     description: string | null; // NYSCEF document description; used when filing as EXHIBIT(S)
     s3Key: string; // queue row's S3Key; used as the dedup identity for arbitrary misc documents
+    exhibitLabelMode: ExhibitLabelMode | null; // per-filing override; null = auto (see computeNextExhibitLabel)
     hasBeenUploaded: boolean;
     wasSkipped: boolean;
     forceUpload: boolean;
+}
+
+// How exhibits are labeled on a filing. NUMBER (1, 2, 3…) is the default: we file as the
+// petitioner, and NY convention numbers petitioner exhibits and letters respondent exhibits.
+export type ExhibitLabelMode = 'NUMBER' | 'LETTER';
+
+export const EXHIBIT_LABEL_MODES: readonly ExhibitLabelMode[] = ['NUMBER', 'LETTER'];
+
+// Normalizes a raw queue-row/payload value into an ExhibitLabelMode. Unrecognized values fall back
+// to null (= auto) with a warning rather than failing the filing, mirroring resolveMiscDocType.
+export function parseExhibitLabelMode(raw: string | null | undefined, context: string): ExhibitLabelMode | null {
+    const value = raw?.trim().toUpperCase();
+    if (!value) return null;
+    if ((EXHIBIT_LABEL_MODES as readonly string[]).includes(value)) return value as ExhibitLabelMode;
+    console.warn(`⚠️ Unrecognized ExhibitLabelMode '${raw}' for ${context} — falling back to automatic labeling. Valid values: ${EXHIBIT_LABEL_MODES.join(', ')}.`);
+    return null;
 }
 
 export enum DocumentType {
@@ -41,6 +58,27 @@ export function isArbitraryMiscDoc(doc: Document): boolean {
         doc.identifier.toLowerCase() !== LEGACY_LETTER_IDENTIFIER &&
         doc.s3Key.trim() !== ''
     );
+}
+
+/**
+ * Human-readable name for a batch of documents, used in notification subjects and headings.
+ *
+ * MISC is not a synonym for "Letter": it also carries exhibits and arbitrary supporting documents,
+ * which mirrors resolveMiscDocType's mapping (only the LETTER code files as correspondence — every
+ * other code, including unrecognized ones, files as EXHIBIT(S)). Calling all of them "Letter" told
+ * negotiators the wrong thing about what was just filed with the court.
+ */
+export function describeUploadType(documents: Document[]): string {
+    if (documents.some((d) => d.type === DocumentType.EVIDENCE)) return 'Evidence';
+
+    const misc = documents.filter((d) => d.type === DocumentType.MISC);
+    if (misc.length > 0) {
+        const labels = new Set(misc.map((d) => (d.identifier.trim().toUpperCase() === 'LETTER' ? 'Letter' : 'Exhibit')));
+        // A mixed batch has no single accurate name — stay generic rather than pick a side.
+        return labels.size === 1 ? [...labels][0] : 'Document';
+    }
+
+    return 'Stipulation';
 }
 
 // Legacy direct-invocation payload shapes (used when NYSCEF_QUEUE_URL is not configured)

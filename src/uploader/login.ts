@@ -1,16 +1,7 @@
 import { Page } from 'playwright-core';
 import { bustCfCookieCache, clearCfCookie } from './initBrowser.js';
 import { CloudflareBlockError } from '../errors.js';
-import { getSecret } from '../shared_helpers/secrets.js';
-
-interface NyscefCredentials { username: string; password: string; }
-let cachedCredentials: NyscefCredentials | null = null;
-
-async function getNyscefCredentials(): Promise<NyscefCredentials> {
-    if (cachedCredentials) return cachedCredentials;
-    cachedCredentials = await getSecret<NyscefCredentials>('nyscef/credentials');
-    return cachedCredentials;
-}
+import { getNyscefCredentials } from './credentials.js';
 
 export async function login(page: Page) {
     // Brief pause before the first navigation. Cloudflare rate-limits rapid new browser

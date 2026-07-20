@@ -156,11 +156,26 @@ describe('getCourtDate', () => {
         expect(await getCourtDate(doc())).toBeNull();
     });
 
-    it('formats date as MM-DD-YYYY', async () => {
+    it('formats a Date object as MM-DD-YYYY', async () => {
+        mockSQL.mockResolvedValueOnce([{ HearingDate: new Date(2025, 5, 15) }] as any);
+        expect(await getCourtDate(doc())).toBe('06-15-2025');
+    });
+
+    it('formats a plain YYYY-MM-DD string without shifting the day', async () => {
+        // Regression: `new Date('2025-06-15')` is UTC midnight, which reads back as June 14 in any
+        // US timezone — every notification would show the day before the real hearing.
+        mockSQL.mockResolvedValueOnce([{ HearingDate: '2025-06-15' }] as any);
+        expect(await getCourtDate(doc())).toBe('06-15-2025');
+    });
+
+    it('formats a full timestamp string on its calendar date', async () => {
         mockSQL.mockResolvedValueOnce([{ HearingDate: '2025-06-15T00:00:00.000Z' }] as any);
-        const result = await getCourtDate(doc());
-        // Date parsing is UTC-based so check format pattern
-        expect(result).toMatch(/^\d{2}-\d{2}-\d{4}$/);
+        expect(await getCourtDate(doc())).toBe('06-15-2025');
+    });
+
+    it('returns null for an unparseable value rather than "NaN-NaN-NaN"', async () => {
+        mockSQL.mockResolvedValueOnce([{ HearingDate: 'not a date' }] as any);
+        expect(await getCourtDate(doc())).toBeNull();
     });
 
     it('queries with scarID and year', async () => {
@@ -237,10 +252,93 @@ describe('notifyResults — subject', () => {
         expect(msg.subject).toContain('Evidence');
     });
 
-    it('includes "Letter" when any doc is MISC type', async () => {
-        await notifyResults('1 Uploaded', [doc({ type: DocumentType.MISC })], undefined, undefined, false, false);
+    it('includes "Letter" for a MISC doc with the LETTER identifier', async () => {
+        await notifyResults('1 Uploaded', [doc({ type: DocumentType.MISC, identifier: 'LETTER' })], undefined, undefined, false, false);
         const msg = mockInvoke.mock.calls[0][1] as any;
         expect(msg.subject).toContain('Letter');
+    });
+
+    it('includes "Letter" for the legacy lower-case letter identifier', async () => {
+        await notifyResults('1 Uploaded', [doc({ type: DocumentType.MISC, identifier: 'letter' })], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('Letter');
+    });
+
+    it('says "Exhibit", not "Letter", for a MISC doc filed as an exhibit', async () => {
+        await notifyResults('1 Uploaded', [doc({ type: DocumentType.MISC, identifier: 'EXHIBIT' })], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('Exhibit');
+        expect(msg.subject).not.toContain('Letter');
+    });
+
+    it('says "Exhibit" for an unrecognized misc code (those file as EXHIBIT(S))', async () => {
+        await notifyResults('1 Uploaded', [doc({ type: DocumentType.MISC, identifier: 'AFFIDAVIT' })], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('Exhibit');
+    });
+
+    it('says "Document" for a mixed batch of letters and exhibits', async () => {
+        const docs = [doc({ type: DocumentType.MISC, identifier: 'LETTER' }), doc({ type: DocumentType.MISC, identifier: 'EXHIBIT' })];
+        await notifyResults('2 Uploaded', docs, undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('Document');
+    });
+
+    it('omits the date entirely when none resolves — no "[no date]" placeholder', async () => {
+        mockSQL.mockResolvedValue([]);
+        await notifyResults('1 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).not.toContain('no date');
+        expect(msg.subject).not.toContain('[');
+    });
+
+    it('includes the court date in brackets when one resolves', async () => {
+        mockSQL.mockResolvedValue([{ HearingDate: '2026-03-04' }]);
+        await notifyResults('1 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('[03-04-2026]');
+    });
+
+    it('resolves the court date for MISC docs too, not just evidence', async () => {
+        mockSQL.mockResolvedValue([{ HearingDate: '2026-03-04' }]);
+        await notifyResults('1 Uploaded', [doc({ type: DocumentType.MISC, identifier: 'EXHIBIT' })], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('[03-04-2026]');
+    });
+
+    it('omits the negotiator entirely when none resolves — no "(Unknown)" placeholder', async () => {
+        mockGetUserDetails.mockResolvedValue(null);
+        await notifyResults('1 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).not.toContain('Unknown)');
+        expect(msg.subject).not.toContain('(');
+    });
+
+    it('includes the negotiator in parens when one resolves', async () => {
+        mockGetUserDetails.mockResolvedValue({ fullName: 'Jane Doe', email: 'jane@aventine.ai' } as any);
+        await notifyResults('1 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('(Jane Doe)');
+    });
+
+    it('marks the subject as a test run when testing=true', async () => {
+        await notifyResults('1 Uploaded', [doc()], undefined, undefined, true, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toContain('[TEST]');
+    });
+
+    it('does not mark the subject when testing=false', async () => {
+        await notifyResults('1 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).not.toContain('[TEST]');
+    });
+
+    it('reads cleanly end-to-end when nothing optional resolves', async () => {
+        mockSQL.mockResolvedValue([]);
+        mockGetUserDetails.mockResolvedValue(null);
+        await notifyResults('1 Uploaded', [doc({ type: DocumentType.MISC, identifier: 'EXHIBIT', municode: 'S08' })], undefined, undefined, true, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.subject).toBe('🧪 [TEST] ⏫ NYSCEF Exhibit Upload for S08 - ✅ 1 Uploaded');
     });
 });
 
