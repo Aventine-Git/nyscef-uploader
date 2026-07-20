@@ -17,8 +17,9 @@ export interface Document {
     forceUpload: boolean;
 }
 
-// How exhibits are labeled on a filing. NUMBER (1, 2, 3…) is the default: we file as the
-// petitioner, and NY convention numbers petitioner exhibits and letters respondent exhibits.
+// How exhibits are labeled on a filing. LETTER (A, B, C…) is the firm's default house style;
+// NUMBER (1, 2, 3…) is available per-filing for judges who follow the NY convention of numbering
+// petitioner exhibits (we file as the petitioner).
 export type ExhibitLabelMode = 'NUMBER' | 'LETTER';
 
 export const EXHIBIT_LABEL_MODES: readonly ExhibitLabelMode[] = ['NUMBER', 'LETTER'];
