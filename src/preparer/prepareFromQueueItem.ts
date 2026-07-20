@@ -19,6 +19,8 @@ export async function prepareFromQueueItem(item: QueueItem): Promise<Document> {
         isVillage: item.IsVillage,
         docBuffer: buffer,
         identifier: item.Identifier,
+        description: item.Description ?? null,
+        s3Key: item.S3Key,
         hasBeenUploaded: false,
         wasSkipped: false,
         forceUpload: item.ForceUpload,

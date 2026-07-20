@@ -49,6 +49,8 @@ async function notifyIfIngestComplete(ingestID: number | undefined, testing: boo
         isVillage: item.IsVillage,
         docBuffer: Buffer.alloc(0), // not needed for notification
         identifier: item.Identifier,
+        description: item.Description ?? null,
+        s3Key: item.S3Key,
         hasBeenUploaded: item.Status === 'UPLOADED' || item.Status === 'SKIPPED',
         wasSkipped: item.Status === 'SKIPPED',
         forceUpload: item.ForceUpload,

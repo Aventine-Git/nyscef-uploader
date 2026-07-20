@@ -56,6 +56,8 @@ async function buildDocumentsFromInput(d: DocInputData, forceUpload: boolean): P
         county: d.county,
         negotiatorID: d.negotiatorID,
         isVillage: d.isVillage,
+        description: null,
+        s3Key: '', // legacy direct path has no queue row; misc dedup does not apply here
         hasBeenUploaded: false,
         wasSkipped: false,
         forceUpload,
