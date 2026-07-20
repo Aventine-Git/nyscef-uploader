@@ -1,12 +1,8 @@
 # Filing Miscellaneous Documents to NYSCEF
 
-**What this is:** we can now file *any* PDF to a NYSCEF case — motions, affidavits, correspondence, supporting
+**What this is:** *any* PDF can be filed to a NYSCEF case — motions, affidavits, correspondence, supporting
 paperwork — not just the comp-generator evidence reports. You put the file in S3, send one API call, and it
 gets filed automatically.
-
-> **Status:** built and deployed, but not yet used in production. Every miscellaneous document filed to date
-> has gone through the older motion-letter script. Please run the first few with `"testing": true` before
-> filing anything real.
 
 > **Note:** the request goes to the `evidence-ingest` service (in the `lambdas` repo). This uploader is what
 > picks the document up afterwards and files it with the court. The guide lives here because filing behavior
@@ -129,10 +125,9 @@ combine miscellaneous documents and regular evidence reports in the same call.
 unchanged file is recognized as a duplicate and will not double-file. A *corrected* version of the file counts
 as new and does get filed. Filing the same file as both `EXHIBIT` and `LETTER` counts as two separate filings.
 
-> ⚠️ Today a duplicate re-send comes back as a `500` error rather than a clean "already queued" message.
-> Nothing is double-filed, but the error looks more alarming than it is. A fix is written and pending deploy;
-> after that it will return the original queue ID instead. Note that `forceUpload` does **not** override
-> this particular case.
+A re-send of an already-queued file returns the original queue ID rather than creating a second entry.
+`forceUpload` does **not** override this — it bypasses the uploader's already-filed checks, not the queue's
+uniqueness on `(s3Bucket, s3Key)`.
 
 **Don't mix `identifier` and `s3Bucket`/`s3Key`.** `identifier` is for comp-generator evidence reports
 (`unequal`, `excessive`, `village`, `training`, `letter`); `s3Bucket` + `s3Key` is for arbitrary documents.
