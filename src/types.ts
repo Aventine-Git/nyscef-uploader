@@ -60,6 +60,27 @@ export function isArbitraryMiscDoc(doc: Document): boolean {
     );
 }
 
+/**
+ * Human-readable name for a batch of documents, used in notification subjects and headings.
+ *
+ * MISC is not a synonym for "Letter": it also carries exhibits and arbitrary supporting documents,
+ * which mirrors resolveMiscDocType's mapping (only the LETTER code files as correspondence — every
+ * other code, including unrecognized ones, files as EXHIBIT(S)). Calling all of them "Letter" told
+ * negotiators the wrong thing about what was just filed with the court.
+ */
+export function describeUploadType(documents: Document[]): string {
+    if (documents.some((d) => d.type === DocumentType.EVIDENCE)) return 'Evidence';
+
+    const misc = documents.filter((d) => d.type === DocumentType.MISC);
+    if (misc.length > 0) {
+        const labels = new Set(misc.map((d) => (d.identifier.trim().toUpperCase() === 'LETTER' ? 'Letter' : 'Exhibit')));
+        // A mixed batch has no single accurate name — stay generic rather than pick a side.
+        return labels.size === 1 ? [...labels][0] : 'Document';
+    }
+
+    return 'Stipulation';
+}
+
 // Legacy direct-invocation payload shapes (used when NYSCEF_QUEUE_URL is not configured)
 export interface DocInputData {
     scarID: string;

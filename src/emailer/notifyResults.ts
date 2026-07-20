@@ -5,7 +5,7 @@ import { findFirstValidCountyCode } from '../helpers/countyCode.js';
 import { findFirstValidNegotiatorID } from '../helpers/negotiator.js';
 import { uploadScreenshotToS3 } from '../helpers/screenshot.js';
 import { formatDataTable } from './formatDataTable.js';
-import { Document, DocumentType } from '../types.js';
+import { Document, describeUploadType } from '../types.js';
 import getCourtDate from './getCourtDate.js';
 import { reportIncident } from '../shared_helpers/reporter.js';
 
@@ -18,12 +18,20 @@ export async function notifyResults(result: string, documents: Document[], faile
 
     const municode = findFirstValidCountyCode(documents);
     const countyCode = municode ? municode : 'Unknown County';
-    const isEvidence = documents.some((d) => d.type === DocumentType.EVIDENCE);
-    const isMisc = documents.some((d) => d.type === DocumentType.MISC);
-    const uploadType = isEvidence ? 'Evidence' : isMisc ? 'Letter' : 'Stipulation';
+    const uploadType = describeUploadType(documents);
     const isSuccess = failedDoc === undefined && !isError;
 
-    const courtDate = isEvidence && documents.length > 0 ? await getCourtDate(documents[0]) : null;
+    // Resolved for every document type, not just evidence — getCourtDate keys off scarID + year,
+    // which every Document has, and misc/stipulation filings sit on dated cases too. A failure here
+    // must not sink the notification itself, so it degrades to "no date known".
+    let courtDate: string | null = null;
+    if (documents.length > 0) {
+        try {
+            courtDate = await getCourtDate(documents[0]);
+        } catch (err: unknown) {
+            console.warn(`Could not resolve court date for ${documents[0].scarID}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
 
     let recipients: string[];
     let slackRecipients: string[];
@@ -57,15 +65,33 @@ export async function notifyResults(result: string, documents: Document[], faile
         slackRecipients = []; // its messaged to me anyways
     }
 
-    const negotiatorName = negotiator?.fullName ?? 'Unknown';
+    const negotiatorName = negotiator?.fullName ?? null;
     const status = isSuccess ? '✅' : '❌';
-    const subject = `⏫ NYSCEF ${uploadType} Upload for [${courtDate ?? 'no date'}] ${countyCode} (${negotiatorName}) - ${status} ${result}`;
+
+    // Assembled from optional parts so an unresolved date or negotiator drops out of the subject
+    // entirely. Rendering them as "[no date]" and "(Unknown)" read like data we had failed to look
+    // up, when usually there simply is none — noise that made real lookup failures invisible.
+    const subject = [
+        testing ? '🧪 [TEST]' : null,
+        `⏫ NYSCEF ${uploadType} Upload for`,
+        courtDate ? `[${courtDate}]` : null,
+        countyCode,
+        negotiatorName ? `(${negotiatorName})` : null,
+        `- ${status} ${result}`,
+    ]
+        .filter((part): part is string => part !== null)
+        .join(' ');
+
     let body = `
     <h2>${uploadType} Ingest Notification for ${countyCode}</h2>
+    `;
+    if (negotiatorName) {
+        body += `
     <div style="background-color:#f8d7da;border:1px solid #f5c6cb;border-radius:4px;padding:12px;margin:12px 0;">
         <strong style="font-size:18px;">Negotiator: ${negotiatorName}</strong>
     </div>
     `;
+    }
     if (testing) {
         body = `<h3 style="color:#e67e22;">⚠️ TESTING MODE - NO DATABASE CHANGES MADE ⚠️</h3>` + body;
     }
