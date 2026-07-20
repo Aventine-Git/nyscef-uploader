@@ -93,55 +93,59 @@ describe('isArbitraryMiscDoc', () => {
 const SCAR_ID = '9999/2025';
 
 describe('computeNextExhibitLabel', () => {
-    describe('default (NUMBER) mode', () => {
-        it('starts at 1 on a case with no exhibits of ours', () => {
-            expect(computeNextExhibitLabel([], null, SCAR_ID)).toBe('1');
+    describe('default (LETTER) mode', () => {
+        it('starts at A on a case with no exhibits of ours', () => {
+            expect(computeNextExhibitLabel([], null, SCAR_ID)).toBe('A');
         });
 
-        it('continues an existing numbered sequence', () => {
-            expect(computeNextExhibitLabel(['1', '2'], null, SCAR_ID)).toBe('3');
+        it('falls to lettering when no labels parse', () => {
+            expect(computeNextExhibitLabel(['AA', '', 'A-1'], null, SCAR_ID)).toBe('A');
         });
 
-        it('uses max+1 rather than filling gaps', () => {
-            expect(computeNextExhibitLabel(['1', '3'], null, SCAR_ID)).toBe('4');
-        });
-
-        it('compares numerically, not lexicographically', () => {
-            // '9' > '10' as strings — a string max would wrongly return 10 here.
-            expect(computeNextExhibitLabel(['9', '10'], null, SCAR_ID)).toBe('11');
-        });
-
-        it('has no ceiling', () => {
-            expect(computeNextExhibitLabel(['999'], null, SCAR_ID)).toBe('1000');
-        });
-    });
-
-    describe('per-case continuity', () => {
-        it('keeps lettering when we already filed lettered exhibits on this case', () => {
-            expect(computeNextExhibitLabel(['A', 'B'], null, SCAR_ID)).toBe('C');
-        });
-
-        it('uses max+1 for letters too, leaving gaps alone', () => {
-            expect(computeNextExhibitLabel(['A', 'C'], null, SCAR_ID)).toBe('D');
-        });
-
-        it('prefers lettering when our history is mixed', () => {
-            // A case that started lettered and picked up a stray number stays lettered rather
-            // than silently switching mid-docket.
+        it('uses the default when our history mixes both styles', () => {
+            // Shouldn't happen in practice, but a mixed history has no single style to continue,
+            // so it falls to the default (LETTER) — max existing letter is A, so next is B.
             expect(computeNextExhibitLabel(['A', '1'], null, SCAR_ID)).toBe('B');
         });
     });
 
+    describe('per-case continuity', () => {
+        it('keeps lettering when we already filed lettered exhibits', () => {
+            expect(computeNextExhibitLabel(['A', 'B'], null, SCAR_ID)).toBe('C');
+        });
+
+        it('keeps numbering when we already filed numbered exhibits', () => {
+            expect(computeNextExhibitLabel(['1', '2'], null, SCAR_ID)).toBe('3');
+        });
+
+        it('uses max+1, leaving gaps alone (letters)', () => {
+            expect(computeNextExhibitLabel(['A', 'C'], null, SCAR_ID)).toBe('D');
+        });
+
+        it('uses max+1, leaving gaps alone (numbers)', () => {
+            expect(computeNextExhibitLabel(['1', '3'], null, SCAR_ID)).toBe('4');
+        });
+
+        it('compares numbers numerically, not lexicographically', () => {
+            // '9' > '10' as strings — a string max would wrongly return 10 here.
+            expect(computeNextExhibitLabel(['9', '10'], null, SCAR_ID)).toBe('11');
+        });
+
+        it('numbered continuity has no ceiling', () => {
+            expect(computeNextExhibitLabel(['999'], null, SCAR_ID)).toBe('1000');
+        });
+    });
+
     describe('explicit override', () => {
-        it('LETTER override starts at A on a fresh case', () => {
-            expect(computeNextExhibitLabel([], 'LETTER', SCAR_ID)).toBe('A');
+        it('NUMBER override starts at 1 on a fresh case', () => {
+            expect(computeNextExhibitLabel([], 'NUMBER', SCAR_ID)).toBe('1');
         });
 
         it('NUMBER override beats continuity with our lettered filings', () => {
             expect(computeNextExhibitLabel(['A', 'B'], 'NUMBER', SCAR_ID)).toBe('1');
         });
 
-        it('LETTER override applies to a numbered case', () => {
+        it('LETTER override beats continuity with our numbered filings', () => {
             expect(computeNextExhibitLabel(['1', '2'], 'LETTER', SCAR_ID)).toBe('A');
         });
     });
@@ -154,10 +158,6 @@ describe('computeNextExhibitLabel', () => {
         it('does not throw in NUMBER mode even past Z', () => {
             expect(computeNextExhibitLabel(['Z'], 'NUMBER', SCAR_ID)).toBe('1');
         });
-    });
-
-    it('ignores unparseable labels rather than failing the filing', () => {
-        expect(computeNextExhibitLabel(['AA', '', 'A-1'], null, SCAR_ID)).toBe('1');
     });
 });
 
@@ -185,10 +185,12 @@ describe('filterToOurExhibits', () => {
         expect(filterToOurExhibits(scraped, 'Somebody Else')).toEqual([]);
     });
 
-    it('the opposing party alone leaves us starting fresh at 1', () => {
+    it('the opposing party alone leaves us starting fresh at the default (A)', () => {
+        // Their numbered exhibit is filtered out, so we see no exhibits of our own and fall to the
+        // default — it does not drag us into numbered continuity.
         const theirs = [{ label: '1', filerName: 'Assessor, Town of Smithtown' }];
         const ours = filterToOurExhibits(theirs, OURS);
-        expect(computeNextExhibitLabel(ours, null, SCAR_ID)).toBe('1');
+        expect(computeNextExhibitLabel(ours, null, SCAR_ID)).toBe('A');
     });
 
     it('our lettered history survives the filter and drives continuity', () => {

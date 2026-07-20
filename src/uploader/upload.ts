@@ -64,10 +64,11 @@ export function resolveMiscDocType(doc: Document): string {
     return NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT;
 }
 
-// We file as the petitioner, and the NY convention (expressly adopted by many judges' individual
-// rules) is that petitioner/plaintiff exhibits are NUMBERED while respondent/defendant exhibits are
-// LETTERED. Numbering is therefore the default; LETTER remains available as a per-filing override.
-const DEFAULT_EXHIBIT_LABEL_MODE: ExhibitLabelMode = 'NUMBER';
+// The NY convention (expressly adopted by many judges' individual rules) is that petitioner exhibits
+// are NUMBERED and respondent exhibits are LETTERED, and we file as the petitioner. We nonetheless
+// default to LETTER: it is the firm's established house style, and NUMBER remains available as a
+// per-filing override for the judges who ask for it.
+const DEFAULT_EXHIBIT_LABEL_MODE: ExhibitLabelMode = 'LETTER';
 
 // One row of the case's document table, as scraped from the NYSCEF DocumentList.
 export interface ScrapedExhibit {
@@ -83,15 +84,21 @@ export interface ScrapedExhibit {
  * independently, so it is expected and correct that our "Exhibit 1" can coexist on the docket
  * with the assessor's "Exhibit 1".
  *
- * Mode resolution: explicit override > continuity with our own prior filings > NUMBER default.
- * The continuity rule keeps a case we started under the old lettered scheme internally
- * consistent rather than producing an A, B, 1 sequence mid-case.
+ * Mode resolution: explicit override > continuity with our own prior filings > default.
+ * The continuity rule keeps a case internally consistent: if we already filed exhibits in one
+ * style, stay in it rather than producing a mixed A, B, 1 sequence mid-case — whichever direction
+ * the default later moves. Only a case with no prior exhibits of ours (or a mix of both styles,
+ * which shouldn't happen) falls through to the default.
  */
 export function computeNextExhibitLabel(ourExistingLabels: string[], override: ExhibitLabelMode | null, scarID: string): string {
     const letters = ourExistingLabels.filter((l) => /^[A-Z]$/.test(l));
     const numbers = ourExistingLabels.filter((l) => /^\d+$/.test(l)).map(Number);
 
-    const mode = override ?? (letters.length > 0 ? 'LETTER' : DEFAULT_EXHIBIT_LABEL_MODE);
+    let continuity: ExhibitLabelMode | null = null;
+    if (letters.length > 0 && numbers.length === 0) continuity = 'LETTER';
+    else if (numbers.length > 0 && letters.length === 0) continuity = 'NUMBER';
+
+    const mode = override ?? continuity ?? DEFAULT_EXHIBIT_LABEL_MODE;
 
     if (mode === 'LETTER') {
         // max+1 rather than first-free: gaps are left alone, matching long-standing behavior.
