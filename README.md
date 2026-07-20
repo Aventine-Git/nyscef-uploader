@@ -99,8 +99,44 @@ Three types are supported — all handled by `DocumentType` in `src/types.ts`:
 | Type | NYSCEF filing type | Notes |
 |------|--------------------|-------|
 | `STIPULATION` | Appropriate stip variant based on `disposition` code | DB: `StipTracking.Status = 'NyscefUploaded'` |
-| `EVIDENCE` | Exhibit A / B | DB: `Court.UploadedEvidence` |
-| `MISC` | Letter / Correspondence to Judge | Not deduplicated; can be re-uploaded freely |
+| `EVIDENCE` | `EXHIBIT(S)`, auto-lettered A→Z | DB: `Court.UploadedEvidence`; deduped per `(ParcelID, Year, identifier)` |
+| `MISC` | Depends on the identifier code — see below | DB: `Court.UploadedLetters` or `Court.UploadedMiscDocs` |
+
+The doc-type branch lives in [`src/uploader/upload.ts`](src/uploader/upload.ts) (NYSCEF dropdown selection),
+[`src/uploader/checkAlreadyUploaded.ts`](src/uploader/checkAlreadyUploaded.ts) (dedup), and
+[`src/uploader.ts`](src/uploader.ts) (post-upload DB write). The queue processor itself does **not** branch on
+`DocumentType` — it prepares and uploads every item uniformly.
+
+### MISC documents
+
+`MISC` covers two distinct flows, distinguished by `isArbitraryMiscDoc()` in [`src/types.ts`](src/types.ts):
+
+| Flow | Condition | NYSCEF type | Dedup |
+|------|-----------|-------------|-------|
+| **Legacy motion letter** | `Identifier = 'letter'`, or no `S3Key` (direct-invoke) | `LETTER / CORRESPONDENCE TO JUDGE` | `Court.UploadedLetters` on `(ParcelID, Year)` |
+| **Arbitrary misc document** | any other `Identifier` **and** a non-empty `S3Key` | resolved from `Identifier` via `MISC_CODE_TO_LABEL` | `Court.UploadedMiscDocs` on `(ParcelID, Year, S3Key, DocType)` |
+
+The `S3Key` requirement is deliberate: the legacy direct-invocation path (`direct.ts`) builds `Document`s with
+no queue row and therefore no `S3Key`, and may set `identifier` to a disposition code. It must stay on the
+`UploadedLetters` path — otherwise it would write dedup rows keyed on an empty `S3Key` and silently skip every
+later misc doc for that parcel.
+
+**Identifier code → NYSCEF label** (`MISC_CODE_TO_LABEL` in `upload.ts` — keep in sync with `MISC_DOC_TYPES`
+in `evidence-ingest/src/types.ts`):
+
+| Code | NYSCEF label | Behavior |
+|------|--------------|----------|
+| `EXHIBIT` (default) | `EXHIBIT(S)` | Reuses the evidence exhibit-lettering path; fills the description field with the queue row's `Description`, falling back to `"Exhibit"` |
+| `LETTER` | `LETTER / CORRESPONDENCE TO JUDGE` | Straight dropdown selection, no extra fields |
+
+Unrecognized codes default to `EXHIBIT(S)`.
+
+Because `evidence-ingest` derives `S3Key` from a SHA-256 of the file's bytes, re-sending an **identical** file
+is idempotent (deduped), while re-sending a **corrected** file produces a new key and re-uploads. Filing the
+same file under two different doc types counts as two distinct filings.
+
+Dedup bypasses: `ForceUpload = true` on the queue row, or a `RealFrom` containing `propriety`. Testing mode
+skips all DB writes.
 
 ---
 
