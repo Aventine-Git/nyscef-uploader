@@ -16,6 +16,7 @@ export interface QueueItem {
     DocumentType: DocumentType;
     Identifier: string; // disposition code for stipulations, evidence type for evidence, NYSCEF doc-type code for misc
     Description: string | null; // NYSCEF document description; used when filing misc docs as EXHIBIT(S)
+    ExhibitLabelMode: string | null; // 'NUMBER' | 'LETTER'; null = auto. Overrides exhibit label style.
     Status: 'QUEUED' | 'PROCESSING' | 'UPLOADED' | 'FAILED' | 'SKIPPED';
     Attempts: number;
     ErrorMessage: string | null;

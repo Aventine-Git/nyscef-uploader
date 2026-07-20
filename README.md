@@ -126,10 +126,35 @@ in `evidence-ingest/src/types.ts`):
 
 | Code | NYSCEF label | Behavior |
 |------|--------------|----------|
-| `EXHIBIT` (default) | `EXHIBIT(S)` | Reuses the evidence exhibit-lettering path; fills the description field with the queue row's `Description`, falling back to `"Exhibit"` |
+| `EXHIBIT` (default) | `EXHIBIT(S)` | Reuses the evidence exhibit-labeling path (numbered by default — see below); fills the description field with the queue row's `Description`, falling back to `"Exhibit"` |
 | `LETTER` | `LETTER / CORRESPONDENCE TO JUDGE` | Straight dropdown selection, no extra fields |
 
 Unrecognized codes default to `EXHIBIT(S)`.
+
+### Exhibit labeling
+
+`computeNextExhibitLabel` (`upload.ts`) picks the label for anything filed as `EXHIBIT(S)`. Exhibits are
+**numbered** (1, 2, 3…) — we file as the petitioner, and NY convention numbers petitioner exhibits while
+lettering respondent exhibits. Resolution order:
+
+1. The queue row's `ExhibitLabelMode` (`NUMBER` | `LETTER`), set from the `exhibitLabelMode` request param.
+2. Continuity: if **we** already filed lettered exhibits on this case, keep lettering.
+3. `NUMBER`.
+
+Only our own exhibits feed steps 2 and 3 — the opposing party's neither set the style nor advance the counter,
+so our "Exhibit 1" can coexist with theirs. Both use max+1, so gaps are left alone. Lettering still throws once
+`Z` is reached; numbering has no ceiling.
+
+> **Ordering constraint:** `scrapeExistingExhibits` must run while the browser is still on the
+> **Document List** page, before clicking "File to this Case". The filing form ("Add Documents")
+> lists `EXHIBIT(S)` only as `<option>` text in the doc-type dropdown — it has no filed-document rows
+> and no "Filed By" cells. Scraping there returns an empty list silently, which is exactly the bug
+> that caused every exhibit to be filed as "A" before this was fixed.
+
+Attribution reads the document table's "Filed By" cell and compares it to `filerName` in the
+`nyscef/credentials` secret. (The row's `filerId` is re-encrypted per docket and is useless as an identity.) If
+`filerName` is unset or matches nothing, the uploader warns and treats no rows as ours — failing open to
+numbering, which is the safe direction.
 
 Because `evidence-ingest` derives `S3Key` from a SHA-256 of the file's bytes, re-sending an **identical** file
 is idempotent (deduped), while re-sending a **corrected** file produces a new key and re-uploads. Filing the

@@ -1,6 +1,7 @@
 import { Page } from 'playwright-core';
 import { retry } from '../helpers/retry.js';
-import { Document, DocumentType } from '../types.js';
+import { Document, DocumentType, ExhibitLabelMode } from '../types.js';
+import { getNyscefFilerName } from './credentials.js';
 
 const NYSCEF_DOC_TYPES = {
     EVIDENCE_EXHIBIT: 'EXHIBIT(S)',
@@ -63,30 +64,100 @@ export function resolveMiscDocType(doc: Document): string {
     return NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT;
 }
 
-// Files the document as an EXHIBIT(S): scrapes existing exhibits to pick the next letter (A, B, C…),
-// selects the exhibit doc type, and fills the exhibit-letter + description fields. Shared by the
-// EVIDENCE path (description from the report type) and the MISC-as-exhibit path (caller description).
-async function selectExhibitDocType(page: Page, doc: Document, description: string): Promise<void> {
-    // find the next evidence exhibit number for this case, starting from A, by looking at existing filings
-    const existingExhibits = await page.$$eval('a', (links) => {
+// We file as the petitioner, and the NY convention (expressly adopted by many judges' individual
+// rules) is that petitioner/plaintiff exhibits are NUMBERED while respondent/defendant exhibits are
+// LETTERED. Numbering is therefore the default; LETTER remains available as a per-filing override.
+const DEFAULT_EXHIBIT_LABEL_MODE: ExhibitLabelMode = 'NUMBER';
+
+// One row of the case's document table, as scraped from the NYSCEF DocumentList.
+export interface ScrapedExhibit {
+    label: string; // the exhibit number/letter, e.g. '1' or 'A'
+    filerName: string; // the "Filed By" cell's display name, '' if absent
+}
+
+/**
+ * Picks the label for the exhibit we're about to file.
+ *
+ * `ourExistingLabels` must already be filtered to exhibits WE filed — the opposing party's
+ * exhibits neither select the mode nor advance the counter. Each side numbers/letters
+ * independently, so it is expected and correct that our "Exhibit 1" can coexist on the docket
+ * with the assessor's "Exhibit 1".
+ *
+ * Mode resolution: explicit override > continuity with our own prior filings > NUMBER default.
+ * The continuity rule keeps a case we started under the old lettered scheme internally
+ * consistent rather than producing an A, B, 1 sequence mid-case.
+ */
+export function computeNextExhibitLabel(ourExistingLabels: string[], override: ExhibitLabelMode | null, scarID: string): string {
+    const letters = ourExistingLabels.filter((l) => /^[A-Z]$/.test(l));
+    const numbers = ourExistingLabels.filter((l) => /^\d+$/.test(l)).map(Number);
+
+    const mode = override ?? (letters.length > 0 ? 'LETTER' : DEFAULT_EXHIBIT_LABEL_MODE);
+
+    if (mode === 'LETTER') {
+        // max+1 rather than first-free: gaps are left alone, matching long-standing behavior.
+        const maxCharCode = letters.length > 0 ? Math.max(...letters.map((l) => l.charCodeAt(0))) : 'A'.charCodeAt(0) - 1;
+        if (maxCharCode >= 'Z'.charCodeAt(0)) {
+            throw new Error(`Exhibit letters exhausted (A-Z) for scarID: ${scarID}`);
+        }
+        return String.fromCharCode(maxCharCode + 1);
+    }
+
+    // Numbers have no ceiling, so there is no exhaustion case to guard.
+    return String(numbers.length > 0 ? Math.max(...numbers) + 1 : 1);
+}
+
+/**
+ * Scrapes every EXHIBIT(S) row on the case, capturing each one's label AND its filer.
+ *
+ * MUST be called while on the DocumentList page. The filing form ("Add Documents") mentions
+ * EXHIBIT(S) only as <option> text in the doc-type dropdown — it carries no filed-document rows and
+ * no "Filed By" cells — so scraping there silently yields nothing. (That was the original bug: the
+ * scrape ran after navigating to the filing form, always came back empty, and every exhibit was
+ * therefore filed as "A".)
+ *
+ * The "Filed By" cell is the third column of the same <tr>, so this needs no extra page load.
+ */
+export async function scrapeExistingExhibits(page: Page): Promise<ScrapedExhibit[]> {
+    return page.$$eval('a', (links) => {
         return links
             .filter((link) => link.textContent?.includes('EXHIBIT(S)'))
             .map((link) => {
-                const rowText = link.closest('tr')?.textContent ?? link.parentElement?.textContent ?? '';
-                // skip numbered exhibits (- 1, - 2, etc.)
-                if (/EXHIBIT\(S\)[\s\S]*?-\s*\d/.test(rowText)) return null;
-                const match = rowText.match(/EXHIBIT\(S\)[\s\S]*?-\s*([A-Z])\b/);
-                return match ? match[1] : null;
+                const row = link.closest('tr');
+                const rowText = row?.textContent ?? link.parentElement?.textContent ?? '';
+                const match = rowText.match(/EXHIBIT\(S\)[\s\S]*?-\s*([A-Z]|\d+)\b/);
+                if (!match) return null;
+                const filerLink = row?.querySelector('a[href*="FilingUserInfo"]');
+                return { label: match[1], filerName: filerLink?.textContent?.trim() ?? '' };
             })
-            .filter((letter): letter is string => letter !== null);
+            .filter((e): e is { label: string; filerName: string } => e !== null);
     });
-    console.log(`Existing exhibits for this case: ${existingExhibits.join(', ')}`);
-    const maxCharCode = existingExhibits.length > 0 ? existingExhibits.map((l) => l.charCodeAt(0)).reduce((a, b) => Math.max(a, b)) : 'A'.charCodeAt(0) - 1;
-    if (maxCharCode >= 'Z'.charCodeAt(0)) {
-        throw new Error(`Exhibit letters exhausted (A-Z) for scarID: ${doc.scarID}`);
+}
+
+// Narrows scraped exhibits to the ones WE filed. Attribution is by filer display name: the row's
+// filerId is re-encrypted per docket, so it is useless as a stable identity. If no filer name is
+// configured (or it matches nothing) we treat NO rows as ours and fall through to the plain default
+// — failing open to numbering is the safe direction now that numbering is the convention.
+export function filterToOurExhibits(scraped: ScrapedExhibit[], ourFilerName: string): string[] {
+    if (!ourFilerName) {
+        console.warn(`⚠️ No filerName configured in the nyscef/credentials secret — cannot tell our exhibits from the opposing party's. Defaulting to ${DEFAULT_EXHIBIT_LABEL_MODE} labeling.`);
+        return [];
     }
-    const nextExhibitLetter = String.fromCharCode(maxCharCode + 1);
-    console.log(`Next exhibit letter to use: ${nextExhibitLetter}`);
+    const ours = scraped.filter((e) => e.filerName.toLowerCase() === ourFilerName.toLowerCase());
+    if (scraped.length > 0 && ours.length === 0) {
+        console.warn(`⚠️ ${scraped.length} exhibit(s) on this case, none filed by '${ourFilerName}'. If that is wrong, the configured filerName does not match NYSCEF's "Filed By" text.`);
+    }
+    console.log(`Existing exhibits for this case: ${ours.length} ours (${ours.map((e) => e.label).join(', ') || 'none'}) of ${scraped.length} total`);
+    return ours.map((e) => e.label);
+}
+
+// Files the document as an EXHIBIT(S): picks the next label (1, 2, 3… by default) from the exhibits
+// scraped off the DocumentList earlier in the flow, selects the exhibit doc type, and fills the
+// exhibit-number + description fields. Shared by the EVIDENCE path (description from the report
+// type) and the MISC-as-exhibit path (caller description).
+async function selectExhibitDocType(page: Page, doc: Document, description: string, existingExhibits: ScrapedExhibit[]): Promise<void> {
+    const ourLabels = filterToOurExhibits(existingExhibits, await getNyscefFilerName());
+    const nextExhibitLabel = computeNextExhibitLabel(ourLabels, doc.exhibitLabelMode, doc.scarID);
+    console.log(`Next exhibit label to use: ${nextExhibitLabel}`);
 
     page.on('dialog', async (dialog) => {
         console.log('Dialog message:', dialog.message());
@@ -94,7 +165,7 @@ async function selectExhibitDocType(page: Page, doc: Document, description: stri
     });
     await retry(async () => {
         await page.selectOption('#selDocType_main_1', { label: NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT });
-        await page.fill('#txtExhNumLet_1', nextExhibitLetter);
+        await page.fill('#txtExhNumLet_1', nextExhibitLabel);
         await page.fill('#txtDocDes_1', description);
     }, 'Error selecting exhibit document type');
 }
@@ -118,6 +189,10 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
             await page.waitForURL('**/DocumentList**');
         }, 'Error navigating to case page');
 
+        // Capture existing exhibits BEFORE leaving the DocumentList — the filing form has no
+        // filed-document rows, so this is the only page where they can be read.
+        const existingExhibits = await scrapeExistingExhibits(page);
+
         // now we're in the case page, click on "File Document" button
         console.log(`Navigating to filing page...`);
         await retry(async () => {
@@ -136,7 +211,7 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
         if (doc.type === DocumentType.EVIDENCE) {
             console.log(`Selecting evidence document type...`);
             const exhibit = doc.identifier.toLowerCase() === 'excessive' ? EXHIBIT.EXCESSIVE : EXHIBIT.UNEQUAL;
-            await selectExhibitDocType(page, doc, exhibit.description);
+            await selectExhibitDocType(page, doc, exhibit.description, existingExhibits);
         } else if (doc.type === DocumentType.STIPULATION) {
             console.log(`Selecting stipulation document type...`);
             await retry(async () => {
@@ -148,7 +223,7 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
             if (miscLabel === NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT) {
                 // Misc files default to EXHIBIT(S) — reuse the exhibit-numbering path with the
                 // caller-supplied description (fall back to a generic label if none provided).
-                await selectExhibitDocType(page, doc, doc.description?.trim() || 'Exhibit');
+                await selectExhibitDocType(page, doc, doc.description?.trim() || 'Exhibit', existingExhibits);
             } else {
                 await retry(async () => {
                     await page.selectOption('#selDocType_main_1', { label: miscLabel });
