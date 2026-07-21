@@ -148,19 +148,19 @@ describe('isArbitraryMiscDoc', () => {
 const SCAR_ID = '9999/2025';
 
 describe('computeNextExhibitLabel', () => {
-    describe('default (LETTER) mode', () => {
-        it('starts at A on a case with no exhibits of ours', () => {
-            expect(computeNextExhibitLabel([], null, SCAR_ID)).toBe('A');
+    describe('default (NUMBER) mode', () => {
+        it('starts at 1 on a case with no exhibits of ours', () => {
+            expect(computeNextExhibitLabel([], null, SCAR_ID)).toBe('1');
         });
 
-        it('falls to lettering when no labels parse', () => {
-            expect(computeNextExhibitLabel(['AA', '', 'A-1'], null, SCAR_ID)).toBe('A');
+        it('falls to numbering when no labels parse', () => {
+            expect(computeNextExhibitLabel(['AA', '', 'A-1'], null, SCAR_ID)).toBe('1');
         });
 
         it('uses the default when our history mixes both styles', () => {
             // Shouldn't happen in practice, but a mixed history has no single style to continue,
-            // so it falls to the default (LETTER) — max existing letter is A, so next is B.
-            expect(computeNextExhibitLabel(['A', '1'], null, SCAR_ID)).toBe('B');
+            // so it falls to the default (NUMBER) — max existing number is 1, so next is 2.
+            expect(computeNextExhibitLabel(['A', '1'], null, SCAR_ID)).toBe('2');
         });
     });
 
@@ -192,8 +192,8 @@ describe('computeNextExhibitLabel', () => {
     });
 
     describe('explicit override', () => {
-        it('NUMBER override starts at 1 on a fresh case', () => {
-            expect(computeNextExhibitLabel([], 'NUMBER', SCAR_ID)).toBe('1');
+        it('LETTER override starts at A on a fresh case', () => {
+            expect(computeNextExhibitLabel([], 'LETTER', SCAR_ID)).toBe('A');
         });
 
         it('NUMBER override beats continuity with our lettered filings', () => {
@@ -240,12 +240,12 @@ describe('filterToOurExhibits', () => {
         expect(filterToOurExhibits(scraped, 'Somebody Else')).toEqual([]);
     });
 
-    it('the opposing party alone leaves us starting fresh at the default (A)', () => {
-        // Their numbered exhibit is filtered out, so we see no exhibits of our own and fall to the
-        // default — it does not drag us into numbered continuity.
-        const theirs = [{ label: '1', filerName: 'Assessor, Town of Smithtown' }];
+    it('the opposing party alone leaves us starting fresh at the default (1)', () => {
+        // Their lettered exhibit is filtered out, so we see no exhibits of our own and fall to the
+        // default — it does not drag us into lettered continuity.
+        const theirs = [{ label: 'A', filerName: 'Assessor, Town of Smithtown' }];
         const ours = filterToOurExhibits(theirs, OURS);
-        expect(computeNextExhibitLabel(ours, null, SCAR_ID)).toBe('A');
+        expect(computeNextExhibitLabel(ours, null, SCAR_ID)).toBe('1');
     });
 
     it('our lettered history survives the filter and drives continuity', () => {

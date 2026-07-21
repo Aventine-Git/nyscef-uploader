@@ -126,7 +126,7 @@ in `evidence-ingest/src/types.ts`):
 
 | Code | NYSCEF label | Behavior |
 |------|--------------|----------|
-| `EXHIBIT` (default) | `EXHIBIT(S)` | Reuses the evidence exhibit-labeling path (lettered by default — see below); fills the exhibit description field (`#txtDocDes_1`) with the queue row's `Description`, falling back to `"Exhibit"` |
+| `EXHIBIT` (default) | `EXHIBIT(S)` | Reuses the evidence exhibit-labeling path (numbered by default — see below); fills the exhibit description field (`#txtDocDes_1`) with the queue row's `Description`, falling back to `"Exhibit"` |
 | `LETTER` | `LETTER / CORRESPONDENCE TO JUDGE` | Selects the dropdown, then best-effort fills the "Additional Document Information" box (`#txtDocDes_1`, the same element the exhibit form uses) with `Description` if one was supplied |
 
 Unrecognized codes default to `EXHIBIT(S)`.
@@ -140,15 +140,16 @@ valid court filing over.
 ### Exhibit labeling
 
 `computeNextExhibitLabel` (`upload.ts`) picks the label for anything filed as `EXHIBIT(S)`. Exhibits are
-**lettered** (A, B, C…) by default — the firm's house style. `NUMBER` is available per-filing for judges who
-follow the NY convention of numbering the petitioner's exhibits (we file as the petitioner). Resolution order:
+**numbered** (1, 2, 3…) by default — we file as the petitioner, and NY convention numbers petitioner exhibits
+while lettering respondent exhibits. `LETTER` is available per-filing for judges who ask for it. Resolution
+order:
 
 1. The queue row's `ExhibitLabelMode` (`NUMBER` | `LETTER`), set from the `exhibitLabelMode` request param.
 2. Continuity: if **we** already filed exhibits in one style on this case, keep that style.
-3. `LETTER` (the default).
+3. `NUMBER` (the default).
 
 Only our own exhibits feed steps 2 and 3 — the opposing party's neither set the style nor advance the counter,
-so our "Exhibit A" can coexist with theirs. Both use max+1, so gaps are left alone. Lettering throws once
+so our "Exhibit 1" can coexist with theirs. Both use max+1, so gaps are left alone. Lettering throws once
 `Z` is reached; numbering has no ceiling.
 
 > **Ordering constraint:** `scrapeExistingExhibits` must run while the browser is still on the
@@ -160,7 +161,7 @@ so our "Exhibit A" can coexist with theirs. Both use max+1, so gaps are left alo
 Attribution reads the document table's "Filed By" cell and compares it to `filerName` in the
 `nyscef/credentials` secret. (The row's `filerId` is re-encrypted per docket and is useless as an identity.) If
 `filerName` is unset or matches nothing, the uploader warns and treats no rows as ours — falling back to the
-default (lettering).
+default (numbering).
 
 Because `evidence-ingest` derives `S3Key` from a SHA-256 of the file's bytes, re-sending an **identical** file
 is idempotent (deduped), while re-sending a **corrected** file produces a new key and re-uploads. Filing the
