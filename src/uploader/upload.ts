@@ -64,11 +64,10 @@ export function resolveMiscDocType(doc: Document): string {
     return NYSCEF_DOC_TYPES.EVIDENCE_EXHIBIT;
 }
 
-// The NY convention (expressly adopted by many judges' individual rules) is that petitioner exhibits
-// are NUMBERED and respondent exhibits are LETTERED, and we file as the petitioner. We nonetheless
-// default to LETTER: it is the firm's established house style, and NUMBER remains available as a
-// per-filing override for the judges who ask for it.
-const DEFAULT_EXHIBIT_LABEL_MODE: ExhibitLabelMode = 'LETTER';
+// We file as the petitioner, and the NY convention (expressly adopted by many judges' individual
+// rules) is that petitioner/plaintiff exhibits are NUMBERED while respondent/defendant exhibits are
+// LETTERED. Numbering is therefore the default; LETTER remains available as a per-filing override.
+const DEFAULT_EXHIBIT_LABEL_MODE: ExhibitLabelMode = 'NUMBER';
 
 // One row of the case's document table, as scraped from the NYSCEF DocumentList.
 export interface ScrapedExhibit {

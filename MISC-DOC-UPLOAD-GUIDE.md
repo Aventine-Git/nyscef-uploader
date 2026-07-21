@@ -62,7 +62,7 @@ Authenticated with AWS IAM (SigV4, service `lambda`, region `us-east-1`) — you
 
 | Value | Files on NYSCEF as | Use for |
 |-------|--------------------|---------|
-| `EXHIBIT` *(default)* | `EXHIBIT(S)` — auto-assigned the next letter (A, B, C…) | Motions, affidavits, supporting documents |
+| `EXHIBIT` *(default)* | `EXHIBIT(S)` — auto-assigned the next number (1, 2, 3…) | Motions, affidavits, supporting documents |
 | `LETTER` | `LETTER / CORRESPONDENCE TO JUDGE` | Correspondence to the judge |
 
 `description` shows up on the filing either way: as the exhibit description for `EXHIBIT`, or in the
@@ -74,24 +74,25 @@ for both — e.g. `"Letter re: adjournment request"`.
 > `LETTER` filing ignores `description` (the exhibit path already uses it). Nothing breaks either
 > way — the box is just left blank on older builds.
 
-### Lettered vs. numbered exhibits
+### Numbered vs. lettered exhibits
 
-Exhibits are **lettered** (A, B, C…) by default. Some judges follow the NY convention of numbering the
-petitioner's exhibits (we file as the petitioner) — for those, pass `exhibitLabelMode: "NUMBER"`.
+Exhibits are **numbered** (1, 2, 3…) by default. We file as the petitioner, and the standard NY convention —
+expressly adopted in many judges' individual rules — numbers petitioner exhibits and letters respondent
+exhibits. For a judge who asks for letters, pass `exhibitLabelMode: "LETTER"`.
 
 You almost never need to set `exhibitLabelMode`. Labels resolve automatically:
 
 1. If you pass `exhibitLabelMode`, that wins.
 2. Otherwise, if **we** already filed exhibits in one style on this case, that style continues (so a case
    doesn't end up with a mixed `A, B, 1` sequence mid-docket).
-3. Otherwise, lettering.
+3. Otherwise, numbering.
 
 Only **our** exhibits count. The opposing party's exhibits neither pick the style nor advance the counter, so
-if the assessor filed their "Exhibit A", ours still starts at A. That is expected — each side labels its own
+if the assessor filed their "Exhibit 1", ours still starts at 1. That is expected — each side labels its own
 exhibits independently.
 
 > Attribution works by matching the "Filed By" name on NYSCEF against `filerName` in the `nyscef/credentials`
-> secret. If that is unset or doesn't match, the uploader logs a warning and falls back to plain lettering.
+> secret. If that is unset or doesn't match, the uploader logs a warning and falls back to plain numbering.
 
 ---
 
