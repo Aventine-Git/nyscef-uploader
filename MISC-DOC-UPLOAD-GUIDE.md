@@ -52,7 +52,7 @@ Authenticated with AWS IAM (SigV4, service `lambda`, region `us-east-1`) — you
 | `year` | Yes | **Tax year, not the SCAR filing year.** These differ: SCAR `805323/2025` above is a 2026 tax-year case. |
 | `s3Bucket` + `s3Key` | Yes | Where the PDF already lives. **Must be sent together.** |
 | `nyscefDocType` | No | `EXHIBIT` (default) or `LETTER`. See below. |
-| `description` | No | The exhibit description shown on NYSCEF. Only used for `EXHIBIT`. |
+| `description` | No | Free-text label shown on the NYSCEF filing. For `EXHIBIT` it's the exhibit description; for `LETTER` it fills the "Additional Document Information" box. |
 | `exhibitLabelMode` | No | `NUMBER` or `LETTER`. Leave it off — labels resolve automatically. See below. |
 | `realFrom` | No | Your email, for the audit trail. |
 | `testing` | No | `true` = run the whole pipeline but don't actually file. |
@@ -65,8 +65,14 @@ Authenticated with AWS IAM (SigV4, service `lambda`, region `us-east-1`) — you
 | `EXHIBIT` *(default)* | `EXHIBIT(S)` — auto-assigned the next letter (A, B, C…) | Motions, affidavits, supporting documents |
 | `LETTER` | `LETTER / CORRESPONDENCE TO JUDGE` | Correspondence to the judge |
 
-With `EXHIBIT`, whatever you put in `description` becomes the exhibit description on the filing. Leave it
-blank and it just says "Exhibit" — worth filling in.
+`description` shows up on the filing either way: as the exhibit description for `EXHIBIT`, or in the
+"Additional Document Information" box for `LETTER`. With `EXHIBIT` it defaults to the word "Exhibit"
+if you leave it blank; with `LETTER` a blank description just leaves that box empty. Worth filling in
+for both — e.g. `"Letter re: adjournment request"`.
+
+> ⚠️ The `LETTER` description is written but not yet deployed. Until the next uploader deploy, a
+> `LETTER` filing ignores `description` (the exhibit path already uses it). Nothing breaks either
+> way — the box is just left blank on older builds.
 
 ### Lettered vs. numbered exhibits
 
