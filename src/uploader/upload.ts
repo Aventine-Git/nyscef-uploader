@@ -177,6 +177,27 @@ async function selectExhibitDocType(page: Page, doc: Document, description: stri
     }, 'Error selecting exhibit document type');
 }
 
+// Fills the description box (#txtDocDes_1 — labeled "Additional Document Information" on the LETTER
+// form) for a doc type that is selected on its own, without the exhibit-numbering path.
+//
+// Best-effort by design: a description is optional metadata, so if the selected doc type does not
+// render the field we log and move on rather than failing an otherwise-valid court filing. The
+// exhibit path fills the same element unconditionally because it is always present there.
+export async function fillOptionalDescription(page: Page, doc: Document): Promise<void> {
+    const description = doc.description?.trim();
+    if (!description) return;
+
+    const descField = page.locator('#txtDocDes_1');
+    if ((await descField.count()) === 0) {
+        console.warn(`Description provided for ParcelID ${doc.parcelID}, but no #txtDocDes_1 field on this form — skipping.`);
+        return;
+    }
+
+    await retry(async () => {
+        await descField.fill(description);
+    }, 'Error filling additional document information');
+}
+
 export async function upload(page: Page, doc: Document, testing: boolean = false) {
     try {
         // Navigate to the case using stip data
@@ -235,6 +256,12 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
                 await retry(async () => {
                     await page.selectOption('#selDocType_main_1', { label: miscLabel });
                 }, 'Error selecting document type for miscellaneous document');
+                // The LETTER form renders an "Additional Document Information" box, which is the same
+                // #txtDocDes_1 element the exhibit form uses for its description (NYSCEF reuses one form
+                // template and relabels the fields per doc type). Fill it best-effort: set it when a
+                // caller supplied a description, but never fail the filing if some doc type does not
+                // render the field.
+                await fillOptionalDescription(page, doc);
             }
         } else {
             throw new Error('Unknown document type for upload.');

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { computeNextExhibitLabel, filterToOurExhibits, resolveMiscDocType } from '../../src/uploader/upload.ts';
+import type { Page } from 'playwright-core';
+import { computeNextExhibitLabel, fillOptionalDescription, filterToOurExhibits, resolveMiscDocType } from '../../src/uploader/upload.ts';
 import { Document, DocumentType, isArbitraryMiscDoc } from '../../src/types.ts';
 
 const EXHIBIT_LABEL = 'EXHIBIT(S)';
@@ -69,6 +70,60 @@ describe('resolveMiscDocType — allowlist drift warning', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         resolveMiscDocType(miscDoc(''));
         expect(warn).not.toHaveBeenCalled();
+    });
+});
+
+// The description box (#txtDocDes_1, labeled "Additional Document Information" on the LETTER form)
+// is filled for doc types selected outside the exhibit-numbering path. Best-effort: fill only when
+// a description was supplied AND the field is present, so a doc type that omits it never breaks a
+// filing. A fake locator stands in for Playwright.
+describe('fillOptionalDescription', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    function fakePage(fieldCount: number) {
+        const fill = vi.fn().mockResolvedValue(undefined);
+        const locator = vi.fn(() => ({
+            count: vi.fn().mockResolvedValue(fieldCount),
+            fill,
+        }));
+        return { page: { locator } as unknown as Page, locator, fill };
+    }
+
+    function letterDoc(description: string | null): Document {
+        return { ...miscDoc('LETTER'), description };
+    }
+
+    it('fills #txtDocDes_1 when a description is supplied and the field is present', async () => {
+        const { page, locator, fill } = fakePage(1);
+        await fillOptionalDescription(page, letterDoc('Letter re: adjournment request'));
+        expect(locator).toHaveBeenCalledWith('#txtDocDes_1');
+        expect(fill).toHaveBeenCalledWith('Letter re: adjournment request');
+    });
+
+    it('trims the description before filling', async () => {
+        const { page, fill } = fakePage(1);
+        await fillOptionalDescription(page, letterDoc('  padded  '));
+        expect(fill).toHaveBeenCalledWith('padded');
+    });
+
+    it('does nothing when no description is supplied', async () => {
+        const { page, locator } = fakePage(1);
+        await fillOptionalDescription(page, letterDoc(null));
+        expect(locator).not.toHaveBeenCalled();
+    });
+
+    it('treats a whitespace-only description as none', async () => {
+        const { page, locator } = fakePage(1);
+        await fillOptionalDescription(page, letterDoc('   '));
+        expect(locator).not.toHaveBeenCalled();
+    });
+
+    it('skips (and warns) without filling when the field is absent', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const { page, fill } = fakePage(0);
+        await fillOptionalDescription(page, letterDoc('some description'));
+        expect(fill).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('no #txtDocDes_1 field'));
     });
 });
 

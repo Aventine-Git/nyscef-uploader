@@ -126,10 +126,16 @@ in `evidence-ingest/src/types.ts`):
 
 | Code | NYSCEF label | Behavior |
 |------|--------------|----------|
-| `EXHIBIT` (default) | `EXHIBIT(S)` | Reuses the evidence exhibit-labeling path (lettered by default — see below); fills the description field with the queue row's `Description`, falling back to `"Exhibit"` |
-| `LETTER` | `LETTER / CORRESPONDENCE TO JUDGE` | Straight dropdown selection, no extra fields |
+| `EXHIBIT` (default) | `EXHIBIT(S)` | Reuses the evidence exhibit-labeling path (lettered by default — see below); fills the exhibit description field (`#txtDocDes_1`) with the queue row's `Description`, falling back to `"Exhibit"` |
+| `LETTER` | `LETTER / CORRESPONDENCE TO JUDGE` | Selects the dropdown, then best-effort fills the "Additional Document Information" box (`#txtDocDes_1`, the same element the exhibit form uses) with `Description` if one was supplied |
 
 Unrecognized codes default to `EXHIBIT(S)`.
+
+The description fill on the non-exhibit path (`fillOptionalDescription` in `upload.ts`) is best-effort:
+NYSCEF renders one filing form and relabels its fields per doc type, so `#txtDocDes_1` is present for
+both `EXHIBIT(S)` and `LETTER`. If a future doc type does not render it, the fill is skipped with a
+warning rather than failing the filing — a description is optional metadata, not worth aborting a
+valid court filing over.
 
 ### Exhibit labeling
 

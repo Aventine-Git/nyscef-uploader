@@ -9,7 +9,7 @@ export interface Document {
     isVillage: boolean;
     docBuffer: Buffer;
     identifier: string; // disposition for stipulations, evidence type for evidence, or NYSCEF doc-type code for misc
-    description: string | null; // NYSCEF document description; used when filing as EXHIBIT(S)
+    description: string | null; // NYSCEF document description; exhibit description (EXHIBIT) or Additional Document Information box (LETTER)
     s3Key: string; // queue row's S3Key; used as the dedup identity for arbitrary misc documents
     exhibitLabelMode: ExhibitLabelMode | null; // per-filing override; null = auto (see computeNextExhibitLabel)
     hasBeenUploaded: boolean;
