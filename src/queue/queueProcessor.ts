@@ -6,6 +6,8 @@ import { handleWithdrawals } from '../helpers/withdrawals.js';
 import { prepareFromQueueItem } from '../preparer/prepareFromQueueItem.js';
 import { reportIncident } from '../shared_helpers/reporter.js';
 import { recordUploadSuccess, recordUploadFailure } from '../helpers/uploadHealth.js';
+import { enterCooldown, clearCooldown } from '../helpers/cfCooldown.js';
+import { CloudflareBlockError } from '../errors.js';
 import { Document, DocumentType } from '../types.js';
 import {
     QueueItem,
@@ -103,6 +105,7 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
             await markUploaded(item.ID);
         }
         recordUploadSuccess(); // upload pipeline is healthy — reset the failure streak
+        clearCooldown(); // a success means Cloudflare is letting us through — lift any pause
         if (!ingestID) {
             // Legacy SQS items without an IngestID — email clerk immediately (no batching possible)
             await emailSCARClerk(output, realFrom, testing);
@@ -111,6 +114,12 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
     } catch (error: any) {
         try { await markFailed(item.ID, error.message); } catch (dbErr) {
             console.error('Failed to mark item as failed:', dbErr);
+        }
+        // A Cloudflare block is the shared session's IP being throttled, not an item-specific
+        // fault — pause all consumption so the rest of the queue doesn't stampede into the same
+        // wall and burn attempts. The worker loops check isInCooldown() before processing.
+        if (error instanceof CloudflareBlockError) {
+            enterCooldown(`ParcelID ${item.ParcelID}: ${error.message}`);
         }
         // item.Attempts is the pre-claim value; claimQueueItem already incremented it by 1.
         // Only fire an incident once all retries are exhausted — transient failures
