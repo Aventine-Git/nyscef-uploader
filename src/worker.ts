@@ -2,6 +2,7 @@ import { SQSClient, ReceiveMessageCommand, DeleteMessageCommand } from '@aws-sdk
 import { processSQSRecords, retryFailedItems } from './queue/queueProcessor.js';
 import { testLogin } from './uploader.js';
 import { reportStatus } from './shared_helpers/reporter.js';
+import { isInCooldown, cooldownRemainingMs } from './helpers/cfCooldown.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -15,6 +16,16 @@ let isShuttingDown = false;
 async function pollSQS(): Promise<void> {
     console.log(`[worker] SQS poll loop started. Queue: ${QUEUE_URL}`);
     while (!isShuttingDown) {
+        // Cloudflare cooldown: don't pull new messages while uploads are paused — leaving them
+        // in the queue (undelivered, not failed) means they keep their full retry budget until
+        // the block clears. Cap the sleep so shutdown stays responsive and we re-check the window.
+        if (isInCooldown()) {
+            const remaining = cooldownRemainingMs();
+            const waitMs = Math.min(remaining, 30000);
+            console.log(`[worker] Cloudflare cooldown active — pausing SQS consumption (${Math.round(remaining / 1000)}s remaining).`);
+            await new Promise((res) => global.setTimeout(res, waitMs));
+            continue;
+        }
         try {
             const response = await sqs.send(
                 new ReceiveMessageCommand({
@@ -49,7 +60,7 @@ async function pollSQS(): Promise<void> {
         } catch (err: any) {
             if (isShuttingDown) break;
             console.error('[worker] SQS receive error:', err.message);
-            await new Promise((res) => setTimeout(res, 5000));
+            await new Promise((res) => global.setTimeout(res, 5000));
         }
     }
     console.log('[worker] Poll loop exited.');
@@ -58,6 +69,12 @@ async function pollSQS(): Promise<void> {
 function startRetryScheduler(): void {
     const run = async () => {
         if (isShuttingDown) return;
+        // Skip the retry sweep during a Cloudflare cooldown — re-running failed items now would
+        // just burn their remaining attempts against the same block. The next tick picks them up.
+        if (isInCooldown()) {
+            console.log(`[worker] Cloudflare cooldown active — skipping scheduled retry (${Math.round(cooldownRemainingMs() / 1000)}s remaining).`);
+            return;
+        }
         console.log('[worker] Running scheduled retry of failed items...');
         try {
             await retryFailedItems();
@@ -68,9 +85,9 @@ function startRetryScheduler(): void {
 
     // Run once on startup to catch anything stuck from a previous run, then on interval.
     run();
-    const interval = setInterval(run, RETRY_INTERVAL_MS);
-    process.on('SIGTERM', () => clearInterval(interval));
-    process.on('SIGINT', () => clearInterval(interval));
+    const interval = global.setInterval(run, RETRY_INTERVAL_MS);
+    process.on('SIGTERM', () => global.clearInterval(interval));
+    process.on('SIGINT', () => global.clearInterval(interval));
 }
 
 async function main(): Promise<void> {
