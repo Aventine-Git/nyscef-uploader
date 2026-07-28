@@ -6,6 +6,7 @@ import { streamToBuffer } from './helpers/buffer.js';
 import { getCountyCodeMap } from './helpers/countyCode.js';
 import { getNegotiatorID } from './helpers/negotiator.js';
 import { determineIsVillage } from './helpers/determineIsVillage.js';
+import { findEvidenceKey } from './helpers/evidenceKey.js';
 import { uploadToNyscef } from './uploader.js';
 import { emailSCARClerk } from './emailer/emailSCARClerk.js';
 import { notifyResults } from './emailer/notifyResults.js';
@@ -32,14 +33,12 @@ async function enrichDoc(doc: any, countyCodeMap: Record<string, string>): Promi
         if (needsUnequal || needsExcessive) {
             const list = await listS3('aventine-court-docs', `residential/evidence/${doc.year}/${doc.parcelID}/`);
             if (needsUnequal) {
-                const key = doc.isVillage
-                    ? list.Contents?.find((item: any) => item.Key?.includes('village'))?.Key
-                    : list.Contents?.find((item: any) => item.Key?.includes('sales') && item.Key?.includes('fnma'))?.Key;
+                const key = findEvidenceKey(list.Contents, 'unequal', doc.isVillage);
                 if (!key) throw new Error(`No unequal evidence file found for parcelID ${doc.parcelID}`);
                 doc.unequalBufferKey = key;
             }
             if (needsExcessive) {
-                const key = list.Contents?.find((item: any) => item.Key?.includes('equity'))?.Key;
+                const key = findEvidenceKey(list.Contents, 'excessive', doc.isVillage);
                 if (!key) throw new Error(`No excessive evidence file found for parcelID ${doc.parcelID}`);
                 doc.excessiveBufferKey = key;
             }
