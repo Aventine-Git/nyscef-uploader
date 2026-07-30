@@ -161,7 +161,11 @@ async function uploadToNyscefLocked(documents: Document[], testing: boolean = fa
                     }
                     await trackDocStatus(ingestID, doc, ingestItemType, IngestItemStatus.UPLOADED, 'Document successfully uploaded to NYSCEF');
                     if (doc.type === DocumentType.STIPULATION) {
-                        const updateQuery = `UPDATE StipTracking SET Status = 'NyscefUploaded', LastUpdateDate = NOW() WHERE ParcelID = ? AND Year = ?`;
+                        // `Status <> 'SoOrdered'` keeps this write from running the lifecycle
+                        // backwards. SoOrdered is set only once the court has so-ordered a stip we
+                        // already filed, so clobbering it with 'NyscefUploaded' loses a real court
+                        // event and leaves the case reading as still awaiting a decision.
+                        const updateQuery = `UPDATE StipTracking SET Status = 'NyscefUploaded', LastUpdateDate = NOW() WHERE ParcelID = ? AND Year = ? AND Status <> 'SoOrdered'`;
                         await executeSQLQuery(updateQuery, [doc.parcelID, doc.year]);
                     } else if (doc.type === DocumentType.EVIDENCE) {
                         const updateQuery = `INSERT Into Court.UploadedEvidence (ParcelID, Year, SCARIndexNumber, Evidence, UploadDate)
