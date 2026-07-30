@@ -9,6 +9,19 @@ import { Document, describeUploadType } from '../types.js';
 import getCourtDate from './getCourtDate.js';
 import { reportIncident } from '../shared_helpers/reporter.js';
 
+/**
+ * The always-available email fallback. Tolerates a NOTIFY_RECIPIENTS that is set but
+ * blank/comma-only — an env var that parses to zero addresses is the same failure as an
+ * unset one, and the message still has to reach somebody.
+ */
+function resolveDefaultRecipients(): string[] {
+    const configured = (process.env.NOTIFY_RECIPIENTS || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter((email) => email.length > 0);
+    return configured.length > 0 ? configured : ['catherine@aventine.ai'];
+}
+
 export async function notifyResults(result: string, documents: Document[], failedDoc?: Document, screenshot?: Buffer, testing: boolean = false, isError: boolean = false, wasRetried: boolean = false) {
     const negotiatorID = findFirstValidNegotiatorID(documents);
     let negotiator: User | null = null;
@@ -43,14 +56,13 @@ export async function notifyResults(result: string, documents: Document[], faile
         recipients = negotiator?.email ? [negotiator.email] : [];
         slackRecipients = negotiator?.slackID ? [negotiator.slackID] : [genericChannel];
         if (wasRetried) {
-            const defaultRecipients = (process.env.NOTIFY_RECIPIENTS || 'catherine@aventine.ai').split(',').map((e) => e.trim());
-            recipients = [...new Set([...defaultRecipients, ...recipients])];
+            recipients = [...new Set([...resolveDefaultRecipients(), ...recipients])];
             const defaultSlack = (process.env.NOTIFY_SLACK_RECIPIENTS || '').split(',').map((id) => id.trim()).filter((id) => id.length > 0);
             slackRecipients = [...new Set([...defaultSlack, ...slackRecipients])];
         }
     } else {
         // Error: notify default recipients + negotiator
-        recipients = (process.env.NOTIFY_RECIPIENTS || 'catherine@aventine.ai').split(',').map((email) => email.trim());
+        recipients = resolveDefaultRecipients();
         slackRecipients = (process.env.NOTIFY_SLACK_RECIPIENTS || '')
             .split(',')
             .map((id) => id.trim())
@@ -63,6 +75,16 @@ export async function notifyResults(result: string, documents: Document[], faile
         console.log('Testing mode enabled - overriding notification recipients.');
         recipients = ['catherine@aventine.ai'];
         slackRecipients = []; // its messaged to me anyways
+    }
+
+    // Slack degrades to a generic channel when the negotiator is unresolved; email had no such
+    // fallback, so a successful upload with no negotiator email produced an empty recipient list.
+    // SES rejects that with "Empty required header 'To'" — a 400 that surfaced as a MAJOR incident
+    // for an upload that had actually gone through. Never hand the notifier an empty list.
+    recipients = recipients.map((email) => email.trim()).filter((email) => email.length > 0);
+    if (recipients.length === 0) {
+        console.warn('No negotiator email resolved for this upload - falling back to default notification recipients.');
+        recipients = resolveDefaultRecipients();
     }
 
     const negotiatorName = negotiator?.fullName ?? null;

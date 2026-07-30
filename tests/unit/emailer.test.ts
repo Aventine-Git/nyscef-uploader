@@ -219,6 +219,45 @@ describe('notifyResults — recipients', () => {
         const msg = mockInvoke.mock.calls[0][1] as any;
         expect(msg.slackChannel).toEqual([]);
     });
+
+    // Regression: an unresolved negotiator on a successful upload left emailAddresses empty,
+    // which SES rejected as "Empty required header 'To'" -> notifier 400 -> MAJOR incident.
+    it('on success with no negotiator resolved, falls back to NOTIFY_RECIPIENTS', async () => {
+        mockGetUserDetails.mockResolvedValueOnce(null);
+        process.env.NOTIFY_RECIPIENTS = 'ops@aventine.ai';
+
+        await notifyResults('5 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.emailAddresses).toEqual(['ops@aventine.ai']);
+    });
+
+    it('on success with a negotiator who has no email, falls back to NOTIFY_RECIPIENTS', async () => {
+        mockGetUserDetails.mockResolvedValueOnce({ email: null, slackID: 'U123', fullName: 'Alice', id: 5 } as any);
+        process.env.NOTIFY_RECIPIENTS = 'ops@aventine.ai';
+
+        await notifyResults('5 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.emailAddresses).toEqual(['ops@aventine.ai']);
+    });
+
+    it('never sends an empty emailAddresses list, even with NOTIFY_RECIPIENTS blank', async () => {
+        mockGetUserDetails.mockResolvedValueOnce(null);
+        process.env.NOTIFY_RECIPIENTS = ' , ';
+
+        await notifyResults('5 Uploaded', [doc()], undefined, undefined, false, false);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.emailAddresses.length).toBeGreaterThan(0);
+        expect(msg.emailAddresses).toEqual(['catherine@aventine.ai']);
+    });
+
+    it('drops blank entries from NOTIFY_RECIPIENTS instead of forwarding them', async () => {
+        mockGetUserDetails.mockResolvedValueOnce(null);
+        process.env.NOTIFY_RECIPIENTS = 'ops@aventine.ai, ,';
+
+        await notifyResults('1 Failed', [doc()], doc(), undefined, false, true);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.emailAddresses).toEqual(['ops@aventine.ai']);
+    });
 });
 
 describe('notifyResults — subject', () => {
