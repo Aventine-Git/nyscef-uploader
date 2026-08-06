@@ -1,6 +1,6 @@
 import { Page } from 'playwright-core';
 import { retry } from '../helpers/retry.js';
-import { Document, DocumentType, ExhibitLabelMode } from '../types.js';
+import { classifyStip, Document, DocumentType, ExhibitLabelMode } from '../types.js';
 import { getNyscefFilerName } from './credentials.js';
 
 const NYSCEF_DOC_TYPES = {
@@ -21,10 +21,13 @@ const EXHIBIT = {
 
 function getStipDocType(doc: Document): string {
     const nassau = doc.county === 'Nassau';
-    switch (doc.identifier) {
-        case 'OA':
+    // classifyStip, not the raw identifier: the duplicate guard decides what counts as the same
+    // filing from the same function, so the doc type filed and the document deduped against can
+    // never disagree about a code.
+    switch (classifyStip(doc.identifier)) {
+        case 'ADJOURNMENT':
             return NYSCEF_DOC_TYPES.STIPULATION_ADJOURNMENT;
-        case 'W':
+        case 'WITHDRAWAL':
             // Nassau & Suffolk: NOTICE OF WITHDRAWAL OF SCAR PETITION (per county filing rules).
             // Other counties: generic STIPULATION - OTHER.
             return nassau || doc.county === 'Suffolk'

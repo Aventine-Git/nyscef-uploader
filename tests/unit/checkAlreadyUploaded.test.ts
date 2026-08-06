@@ -13,8 +13,8 @@ const mockSQL = vi.mocked(executeSQLQuery);
 
 // mockReset, not just clearAllMocks: clearAllMocks resets recorded calls but leaves any unconsumed
 // mockResolvedValueOnce values queued, so a test that queues more responses than it consumes
-// silently feeds them to the next one. The stipulation path returns early when the status alone
-// proves a prior filing, which makes that imbalance easy to introduce.
+// silently feeds them to the next one. The stipulation path returns early whenever the upload queue
+// alone settles the question, which makes that imbalance easy to introduce.
 beforeEach(() => {
     vi.clearAllMocks();
     mockSQL.mockReset();
@@ -45,6 +45,11 @@ function evidenceDoc(identifier = 'Unequal'): Document {
     return { ...stipDoc(), type: DocumentType.EVIDENCE, identifier };
 }
 
+// Rows as filedStipClasses() reads them: DISTINCT Identifier off Court.NyscefUploadQueue.
+function queue(...identifiers: string[]) {
+    return identifiers.map((Identifier) => ({ Identifier }));
+}
+
 // ─── Propriety override ───────────────────────────────────────────────────────
 
 describe('checkAlreadyUploaded — Propriety override', () => {
@@ -61,11 +66,104 @@ describe('checkAlreadyUploaded — Propriety override', () => {
     });
 });
 
-// ─── STIPULATION checks ───────────────────────────────────────────────────────
+// ─── STIPULATION: the upload queue decides ────────────────────────────────────
+// Court.NyscefUploadQueue is asked first and, whenever it has anything for the parcel/year, it is
+// the answer — it is the only record carrying the disposition, so it alone can say *which* document
+// was filed. StipTracking.Status is consulted only when the queue is silent.
+//
+// It is also the more durable record: stipulation-ingest calls setCountersign() on every batch it
+// accepts, resetting Status to 'Countersigned' *before* it queues anything, which on a re-sent batch
+// wipes the evidence of the earlier filing before this guard ever reads it.
 
-describe('checkAlreadyUploaded — STIPULATION', () => {
-    it('returns true when status is NyscefUploaded', async () => {
-        mockSQL.mockResolvedValueOnce([{ Status: 'NyscefUploaded' }] as any);
+describe('checkAlreadyUploaded — STIPULATION (queue is authoritative)', () => {
+    it('returns true when the queue shows a prior filing of the same class, whatever the status says', async () => {
+        mockSQL.mockResolvedValueOnce(queue('ST') as any);
+        expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(true);
+    });
+
+    it('does not consult StipTracking once the queue has answered', async () => {
+        mockSQL.mockResolvedValueOnce(queue('ST') as any);
+        await checkAlreadyUploaded(stipDoc(), 'a@b.com');
+        expect(mockSQL).toHaveBeenCalledTimes(1);
+    });
+
+    it('selects DISTINCT Identifier for UPLOADED, non-testing stipulation rows on this parcel/year', async () => {
+        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([] as any);
+        await checkAlreadyUploaded(stipDoc({ parcelID: 'ABC-123', year: 2024 }), 'a@b.com');
+
+        const [sql, params] = mockSQL.mock.calls[0];
+        expect(sql).toContain('DISTINCT Identifier');
+        expect(sql).toContain('Court.NyscefUploadQueue');
+        expect(sql).toContain("DocumentType = 'STIPULATION'");
+        expect(sql).toContain("Status = 'UPLOADED'");
+        expect(sql).toContain('Testing = 0');
+        expect(params).toEqual(['ABC-123', 2024]);
+    });
+
+    it('returns false when neither the queue nor the status shows a prior filing', async () => {
+        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([{ Status: 'Countersigned' }] as any);
+        expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(false);
+    });
+
+    it('is not consulted for a Propriety sender, which is allowed to re-file', async () => {
+        expect(await checkAlreadyUploaded(stipDoc(), 'upload@propriety.com')).toBe(false);
+        expect(mockSQL).not.toHaveBeenCalled();
+    });
+});
+
+// ─── STIPULATION: withdrawal vs settlement ────────────────────────────────────
+// A withdrawal and a settlement are different documents on the same case, and a case that settles
+// and is then withdrawn (owner-occupancy, say) has to be able to file both. Deduping on parcel/year
+// alone made the withdrawal indistinguishable from a re-send of the settlement and dropped it with
+// no error — the failure this class-awareness exists to prevent.
+
+describe('checkAlreadyUploaded — STIPULATION (document class)', () => {
+    it('lets a withdrawal through when only a settlement is on file', async () => {
+        mockSQL.mockResolvedValueOnce(queue('ST') as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'W' }), 'assessor@town.gov')).toBe(false);
+    });
+
+    it('lets a settlement through when only a withdrawal is on file', async () => {
+        mockSQL.mockResolvedValueOnce(queue('W') as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'ST' }), 'a@b.com')).toBe(false);
+    });
+
+    it('still blocks a second withdrawal once one is filed', async () => {
+        mockSQL.mockResolvedValueOnce(queue('W') as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'W' }), 'a@b.com')).toBe(true);
+    });
+
+    it('treats every settlement code as one class — SD dedups against S', async () => {
+        // 'S', 'SD' and 'ST' all file the identical settlement stipulation, so they must not be
+        // mistaken for three distinct documents.
+        mockSQL.mockResolvedValueOnce(queue('S') as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'SD' }), 'a@b.com')).toBe(true);
+    });
+
+    it('treats an adjournment request as its own class', async () => {
+        mockSQL.mockResolvedValueOnce(queue('ST') as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'OA' }), 'a@b.com')).toBe(false);
+    });
+
+    it('blocks once a filing of every class is on record', async () => {
+        mockSQL.mockResolvedValueOnce(queue('ST', 'W') as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'W' }), 'a@b.com')).toBe(true);
+    });
+
+    it('normalizes case and surrounding whitespace on the stored disposition', async () => {
+        mockSQL.mockResolvedValueOnce(queue(' w ') as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'W' }), 'a@b.com')).toBe(true);
+    });
+});
+
+// ─── STIPULATION: legacy status fallback ──────────────────────────────────────
+// Filings that predate Court.NyscefUploadQueue (Feb 2026) left no row in it — about a third of all
+// filed cases. StipTracking is the only surviving evidence for those and cannot say what was filed,
+// so it blocks every class; a deliberate re-file there needs forceUpload.
+
+describe('checkAlreadyUploaded — STIPULATION (legacy status fallback)', () => {
+    it('returns true when status is NyscefUploaded and the queue is empty', async () => {
+        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([{ Status: 'NyscefUploaded' }] as any);
         expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(true);
     });
 
@@ -76,72 +174,36 @@ describe('checkAlreadyUploaded — STIPULATION', () => {
      * recognised the moment it advanced, and 41 Islip stips were filed a second time.
      */
     it('returns true when status is SoOrdered — past NyscefUploaded, not before it', async () => {
-        mockSQL.mockResolvedValueOnce([{ Status: 'SoOrdered' }] as any);
+        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([{ Status: 'SoOrdered' }] as any);
         expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(true);
+    });
+
+    it('blocks a legacy case regardless of the incoming class, having no way to tell them apart', async () => {
+        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([{ Status: 'NyscefUploaded' }] as any);
+        expect(await checkAlreadyUploaded(stipDoc({ identifier: 'W' }), 'a@b.com')).toBe(true);
     });
 
     it('returns true when any row is filed, even if an arbitrary earlier row is not', async () => {
         // StipTracking is keyed (ParcelID, Year, Stage, CaseType); this lookup supplies half of
         // that, so row order carries no meaning and result[0] was a coin flip.
-        mockSQL.mockResolvedValueOnce([{ Status: 'Countersigned' }, { Status: 'SoOrdered' }] as any);
+        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([{ Status: 'Countersigned' }, { Status: 'SoOrdered' }] as any);
         expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(true);
     });
 
     it('returns false when status is not a filed status', async () => {
-        mockSQL.mockResolvedValueOnce([{ Status: 'Pending' }] as any).mockResolvedValueOnce([] as any);
+        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([{ Status: 'Pending' }] as any);
         expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(false);
     });
 
-    it('returns false when no rows found', async () => {
+    it('returns false when no rows found anywhere', async () => {
         mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([] as any);
         expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(false);
     });
 
-    it('queries with correct parcelID and year', async () => {
+    it('queries StipTracking with correct parcelID and year', async () => {
         mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([] as any);
         await checkAlreadyUploaded(stipDoc({ parcelID: 'ABC-123', year: 2024 }), 'a@b.com');
         expect(mockSQL).toHaveBeenCalledWith(expect.stringContaining('StipTracking'), ['ABC-123', 2024]);
-    });
-});
-
-// ─── STIPULATION: upload-queue fallback ───────────────────────────────────────
-// stipulation-ingest calls setCountersign() on every batch it accepts, resetting
-// StipTracking.Status to 'Countersigned' *before* it queues anything. On a re-sent batch that wipes
-// the record of the earlier filing before this guard ever reads it, which is why the status check
-// alone only ever caught re-sends that overlapped the original upload in time.
-
-describe('checkAlreadyUploaded — STIPULATION (upload-queue fallback)', () => {
-    it('returns true when the status was reset to Countersigned but the queue shows a prior filing', async () => {
-        mockSQL.mockResolvedValueOnce([{ Status: 'Countersigned' }] as any).mockResolvedValueOnce([{ ID: 7299 }] as any);
-        expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(true);
-    });
-
-    it('returns false when neither the status nor the queue shows a prior filing', async () => {
-        mockSQL.mockResolvedValueOnce([{ Status: 'Countersigned' }] as any).mockResolvedValueOnce([] as any);
-        expect(await checkAlreadyUploaded(stipDoc(), 'assessor@town.gov')).toBe(false);
-    });
-
-    it('counts only UPLOADED, non-testing stipulation rows for this parcel/year', async () => {
-        mockSQL.mockResolvedValueOnce([] as any).mockResolvedValueOnce([] as any);
-        await checkAlreadyUploaded(stipDoc({ parcelID: 'ABC-123', year: 2024 }), 'a@b.com');
-
-        const [sql, params] = mockSQL.mock.calls[1];
-        expect(sql).toContain('Court.NyscefUploadQueue');
-        expect(sql).toContain("DocumentType = 'STIPULATION'");
-        expect(sql).toContain("Status = 'UPLOADED'");
-        expect(sql).toContain('Testing = 0');
-        expect(params).toEqual(['ABC-123', 2024]);
-    });
-
-    it('skips the queue lookup entirely when the status already proves a prior filing', async () => {
-        mockSQL.mockResolvedValueOnce([{ Status: 'NyscefUploaded' }] as any);
-        await checkAlreadyUploaded(stipDoc(), 'a@b.com');
-        expect(mockSQL).toHaveBeenCalledTimes(1);
-    });
-
-    it('is not consulted for a Propriety sender, which is allowed to re-file', async () => {
-        expect(await checkAlreadyUploaded(stipDoc(), 'upload@propriety.com')).toBe(false);
-        expect(mockSQL).not.toHaveBeenCalled();
     });
 });
 

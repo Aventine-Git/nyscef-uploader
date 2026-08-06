@@ -40,6 +40,36 @@ export enum DocumentType {
     MISC = 'MISC',
 }
 
+/**
+ * What a STIPULATION-type document actually files as with the court.
+ *
+ * `Document.identifier` for a stipulation is the raw disposition code copied from
+ * `Courtfiles.SCARDeterminationAction` — S, SD, ST, W, OA, NM, D, AH. Most of those describe *how* a
+ * case settled and all produce the same settlement stipulation; only 'W' and 'OA' produce a
+ * genuinely different document. Both the NYSCEF doc-type dropdown (getStipDocType) and the duplicate
+ * guard (checkAlreadyUploaded) care about that outcome rather than the raw code, and they derive it
+ * from here so the two can never disagree about what a code means.
+ *
+ * Classes, not raw codes, is what makes the guard correct in both directions: 'S' and 'SD' are not
+ * two different filings and must still dedup against each other, while a withdrawal on a case whose
+ * settlement stip is already filed is a distinct document and must be allowed through.
+ *
+ * IMPORTANT: keep in sync with `classifyStip` in stipulation-ingest/src/types.ts, which runs the
+ * same check one stage earlier. The two lambdas live in separate repos and cannot share a module.
+ */
+export type StipClass = 'WITHDRAWAL' | 'ADJOURNMENT' | 'SETTLEMENT';
+
+export function classifyStip(identifier: string | null | undefined): StipClass {
+    switch (identifier?.trim().toUpperCase()) {
+        case 'W':
+            return 'WITHDRAWAL';
+        case 'OA':
+            return 'ADJOURNMENT';
+        default:
+            return 'SETTLEMENT';
+    }
+}
+
 // The original MISC document: a motion letter, filed as LETTER / CORRESPONDENCE TO JUDGE and
 // deduped in Court.UploadedLetters by parcel/year.
 export const LEGACY_LETTER_IDENTIFIER = 'letter';

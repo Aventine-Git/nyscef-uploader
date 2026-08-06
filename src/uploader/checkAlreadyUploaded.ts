@@ -1,5 +1,5 @@
 import { executeSQLQuery } from '../shared_helpers/sql.js';
-import { Document, DocumentType, isArbitraryMiscDoc } from '../types.js';
+import { classifyStip, Document, DocumentType, isArbitraryMiscDoc, StipClass } from '../types.js';
 
 /**
  * `StipTracking.Status` values that mean the stip is already on file with the court.
@@ -14,27 +14,33 @@ import { Document, DocumentType, isArbitraryMiscDoc } from '../types.js';
 export const FILED_STIP_STATUSES: readonly string[] = ['NyscefUploaded', 'SoOrdered'];
 
 /**
- * Has a stip for this parcel/year already been filed, per the upload queue?
+ * Which kinds of stipulation have already been filed for this parcel/year, per the upload queue.
  *
- * Consulted in addition to `StipTracking.Status` because that column is not a durable record of
- * what was filed. stipulation-ingest calls `setCountersign` on every batch it accepts, resetting
- * Status to 'Countersigned' *before* it queues anything — so on a re-sent batch the evidence of the
- * earlier filing is gone by the time this guard runs, and the status check alone can only ever
- * catch a re-send that overlaps the original upload in time. Court.NyscefUploadQueue is
- * append-only: nothing rewrites a row once it reaches UPLOADED.
+ * The queue is the only record of *what* was filed — it carries the disposition in `Identifier`,
+ * which `StipTracking.Status` does not. That distinction is the whole point: a settlement and a
+ * withdrawal are different documents on the same case, and a case that settles and is then
+ * withdrawn has to be able to file both.
+ *
+ * Consulted in preference to `StipTracking.Status` because that column is also not a durable record
+ * that anything was filed at all. stipulation-ingest calls `setCountersign` on every batch it
+ * accepts, resetting Status to 'Countersigned' *before* it queues anything — so on a re-sent batch
+ * the evidence of the earlier filing is gone by the time this guard runs. Court.NyscefUploadQueue
+ * is append-only: nothing rewrites a row once it reaches UPLOADED.
+ *
+ * Returned as classes rather than raw codes so the several codes that file an identical settlement
+ * stipulation ('S', 'SD', 'ST' …) still dedup against one another.
  *
  * The row being processed right now cannot match itself — it only becomes UPLOADED after a
  * successful filing, and it is QUEUED or PROCESSING at this point. Testing rows are excluded
  * because they never reach the portal, so they must not block a real filing.
  */
-async function hasFiledStipulation(parcelID: string, year: number): Promise<boolean> {
+async function filedStipClasses(parcelID: string, year: number): Promise<Set<StipClass>> {
     const rows = (await executeSQLQuery(
-        `SELECT ID FROM Court.NyscefUploadQueue
-          WHERE ParcelID = ? AND Year = ? AND DocumentType = 'STIPULATION' AND Status = 'UPLOADED' AND Testing = 0
-          LIMIT 1`,
+        `SELECT DISTINCT Identifier FROM Court.NyscefUploadQueue
+          WHERE ParcelID = ? AND Year = ? AND DocumentType = 'STIPULATION' AND Status = 'UPLOADED' AND Testing = 0`,
         [parcelID, year]
-    )) as Array<{ ID: number }> | undefined;
-    return !!rows && rows.length > 0;
+    )) as Array<{ Identifier: string }> | undefined;
+    return new Set((rows ?? []).map((r) => classifyStip(r.Identifier)));
 }
 
 export async function checkAlreadyUploaded(doc: Document, realFrom: string): Promise<boolean> {
@@ -45,16 +51,39 @@ export async function checkAlreadyUploaded(doc: Document, realFrom: string): Pro
     }
 
     if (doc.type === DocumentType.STIPULATION) {
-        const checkQuery = `SELECT Status FROM StipTracking WHERE ParcelID = ? AND Year = ?`;
-        const result = (await executeSQLQuery(checkQuery, [doc.parcelID, doc.year])) as Array<{ Status: string }>;
+        const incoming = classifyStip(doc.identifier);
+
+        // The queue is asked first and, whenever it knows anything about this parcel/year, it is the
+        // answer. It is the only source that records *which* document was filed; StipTracking.Status
+        // records merely that something was. Letting the coarse signal answer first is what silently
+        // blocked a withdrawal on a case whose settlement stip had already been filed — the two are
+        // different filings, and the court needs both.
+        const filed = await filedStipClasses(doc.parcelID, doc.year);
+        if (filed.size > 0) {
+            if (filed.has(incoming)) {
+                console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} - a ${incoming} stipulation is already filed for ${doc.year}`);
+                return true;
+            }
+            console.log(
+                `➡️ ParcelID: ${doc.parcelID} - prior filing(s) for ${doc.year}: [${[...filed].join(', ')}]; ` +
+                    `incoming is ${incoming}, a distinct document. Proceeding with upload.`
+            );
+            return false;
+        }
+
+        // Nothing in the queue: a filing that predates Court.NyscefUploadQueue (Feb 2026), where
+        // StipTracking is the only surviving evidence. It cannot say which document was filed, so it
+        // has to block every class — a deliberate re-file on such a case needs forceUpload.
+        //
         // `.some`, not `result[0]`: StipTracking is keyed (ParcelID, Year, Stage, CaseType) and this
         // lookup supplies only half that key, so which row came back first was arbitrary.
+        const checkQuery = `SELECT Status FROM StipTracking WHERE ParcelID = ? AND Year = ?`;
+        const result = (await executeSQLQuery(checkQuery, [doc.parcelID, doc.year])) as Array<{ Status: string }>;
         if (result && result.some((r) => FILED_STIP_STATUSES.includes(r.Status))) {
-            console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} - Stipulation already uploaded`);
-            return true;
-        }
-        if (await hasFiledStipulation(doc.parcelID, doc.year)) {
-            console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} - Stipulation already filed (NyscefUploadQueue has an UPLOADED row for this parcel/year)`);
+            console.log(
+                `⏭️ Skipping ParcelID: ${doc.parcelID} - Stipulation already uploaded (legacy filing with no queue row; ` +
+                    `StipTracking cannot distinguish a ${incoming} from what was filed)`
+            );
             return true;
         }
     } else if (doc.type === DocumentType.EVIDENCE) {
