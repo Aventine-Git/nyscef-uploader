@@ -7,7 +7,7 @@ import { prepareFromQueueItem } from '../preparer/prepareFromQueueItem.js';
 import { reportIncident } from '../shared_helpers/reporter.js';
 import { recordUploadSuccess, recordUploadFailure } from '../helpers/uploadHealth.js';
 import { enterCooldown, clearCooldown } from '../helpers/cfCooldown.js';
-import { CloudflareBlockError } from '../errors.js';
+import { CloudflareBlockError, UnverifiedSubmissionError } from '../errors.js';
 import { Document, DocumentType } from '../types.js';
 import {
     QueueItem,
@@ -18,6 +18,7 @@ import {
     getItemsForIngest,
     getQueueItemById,
     getRetryItems,
+    markNeedsReview,
     markFailed,
     markSkipped,
     markUploaded,
@@ -25,6 +26,26 @@ import {
 } from './queueClient.js';
 
 const MAX_ATTEMPTS = 3;
+
+// Sweeps rows abandoned in PROCESSING, and pages a human for the ones that had already been
+// submitted to NYSCEF when the run died. Those are moved to NEEDS_REVIEW rather than FAILED so
+// nothing re-files them, which means no later attempt will surface them either — this incident is
+// the only notice anyone gets that a document may be on the docket with no record of it.
+async function recoverStuckItems(): Promise<void> {
+    const { needsReviewIDs } = await resetStuckProcessingItems();
+    if (needsReviewIDs.length === 0) return;
+
+    console.warn(`${needsReviewIDs.length} stuck item(s) were submitted before the run died — marked NEEDS_REVIEW: ${needsReviewIDs.join(', ')}`);
+    await reportIncident(
+        'nyscef-uploader',
+        'stuck after submit',
+        'critical',
+        `${needsReviewIDs.length} filing(s) were submitted to NYSCEF but the run died before the outcome could be recorded.\n\n` +
+            `Queue row ID(s): ${needsReviewIDs.join(', ')}\n\n` +
+            `These are marked NEEDS_REVIEW and will NOT be retried automatically — re-filing blind would duplicate a real court filing. ` +
+            `Check each case on NYSCEF: if the document is on the docket, mark the row UPLOADED; if not, set it back to QUEUED.`
+    ).catch((e) => console.error('Failed to report stuck-after-submit incident:', e));
+}
 
 async function notifyIfIngestComplete(ingestID: number | undefined, testing: boolean): Promise<void> {
     if (!ingestID) return; // legacy items without an IngestID — direct.ts handles notification
@@ -112,8 +133,16 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
         }
         await handleWithdrawals(output, testing);
     } catch (error: any) {
-        try { await markFailed(item.ID, error.message); } catch (dbErr) {
-            console.error('Failed to mark item as failed:', dbErr);
+        // An unverified submission is not a normal failure: the document may already be with the
+        // court. FAILED is re-claimable (claimQueueItem selects QUEUED/FAILED, and the 15-minute
+        // stuck-item sweep pushes PROCESSING into FAILED), so marking it FAILED would auto-refile
+        // it and duplicate a real court filing. NEEDS_REVIEW is terminal for every automated path.
+        const needsReview = error instanceof UnverifiedSubmissionError;
+        try {
+            if (needsReview) await markNeedsReview(item.ID, error.message);
+            else await markFailed(item.ID, error.message);
+        } catch (dbErr) {
+            console.error('Failed to record item outcome:', dbErr);
         }
         // A Cloudflare block is the shared session's IP being throttled, not an item-specific
         // fault — pause all consumption so the rest of the queue doesn't stampede into the same
@@ -124,7 +153,9 @@ async function processItem(item: QueueItem, notifyOnComplete = true): Promise<vo
         // item.Attempts is the pre-claim value; claimQueueItem already incremented it by 1.
         // Only fire an incident once all retries are exhausted — transient failures
         // (Cloudflare blocks, network blips) should resolve on a later attempt without noise.
-        if (item.Attempts + 1 < MAX_ATTEMPTS) {
+        // An unverified submission is always reported, regardless of attempt count — it is
+        // terminal, nothing will retry it, and it needs a human on the docket today.
+        if (item.Attempts + 1 < MAX_ATTEMPTS && !needsReview) {
             error.noReport = true;
         }
         // The worker has no handler wrapper to raise incidents, so track consecutive
@@ -171,7 +202,7 @@ export async function processSQSRecords(records: any[]): Promise<void> {
 }
 
 export async function forceRetryExhaustedItems(): Promise<void> {
-    await resetStuckProcessingItems();
+    await recoverStuckItems();
     const items = await getExhaustedItems(MAX_ATTEMPTS);
     if (items.length === 0) {
         console.log('No exhausted items to force-retry.');
@@ -208,7 +239,7 @@ export async function forceRetryExhaustedItems(): Promise<void> {
 }
 
 export async function forceRetryAllItems(): Promise<void> {
-    await resetStuckProcessingItems();
+    await recoverStuckItems();
     const items = await getAllPendingItems();
     if (items.length === 0) {
         console.log('No pending items to process.');
@@ -245,7 +276,7 @@ export async function forceRetryAllItems(): Promise<void> {
 }
 
 export async function retryFailedItems(): Promise<void> {
-    await resetStuckProcessingItems();
+    await recoverStuckItems();
     const items = await getRetryItems(MAX_ATTEMPTS);
     if (items.length === 0) {
         console.log('No failed items eligible for retry.');

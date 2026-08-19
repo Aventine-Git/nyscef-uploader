@@ -25,5 +25,6 @@ export async function prepareFromQueueItem(item: QueueItem): Promise<Document> {
         hasBeenUploaded: false,
         wasSkipped: false,
         forceUpload: item.ForceUpload,
+        queueItemID: item.ID,
     } satisfies Document;
 }

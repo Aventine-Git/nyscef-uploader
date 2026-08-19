@@ -1,5 +1,6 @@
 import { PDFDocument } from 'pdf-lib';
 import { Readable } from 'stream';
+import { saveForNyscef } from '../shared_helpers/pdfCompat.js';
 
 export async function streamToBuffer(stream: Readable): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
@@ -17,6 +18,7 @@ export async function mergePDFBuffers(buffers: Buffer[]): Promise<Buffer> {
         const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
         copiedPages.forEach((page) => mergedPdf.addPage(page));
     }
-    const mergedBytes = await mergedPdf.save();
-    return Buffer.from(mergedBytes);
+    // This buffer reaches the SCAR clerk, so it goes out in the older PDF shape rather than
+    // pdf-lib's default — see pdfCompat.
+    return saveForNyscef(mergedPdf);
 }
