@@ -15,6 +15,15 @@ export interface Document {
     hasBeenUploaded: boolean;
     wasSkipped: boolean;
     forceUpload: boolean;
+    // NYSCEF's confirmation/document reference, scraped from the post-submit page. Only set once a
+    // filing has been positively confirmed, so its presence is the evidence that hasBeenUploaded
+    // means "on the docket" rather than "we pressed submit". Undefined in testing mode, and when
+    // NYSCEF confirms without exposing a reference.
+    confirmationRef?: string;
+    // Originating Court.NyscefUploadQueue row, when this document came from the queue. Used to
+    // stamp SubmittedAt before the filing is submitted, so a crash mid-filing can be told apart
+    // from a crash before it. Undefined for direct invocations, which have no queue row.
+    queueItemID?: number;
 }
 
 // How exhibits are labeled on a filing. NUMBER (1, 2, 3…) is the default: we file as the

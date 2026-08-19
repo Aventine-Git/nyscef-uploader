@@ -2,6 +2,18 @@ import { Page } from 'playwright-core';
 import { retry } from '../helpers/retry.js';
 import { classifyStip, Document, DocumentType, ExhibitLabelMode } from '../types.js';
 import { getNyscefFilerName } from './credentials.js';
+import { verifySubmission } from './verifySubmission.js';
+import { RejectedSubmissionError, UnverifiedSubmissionError } from '../errors.js';
+import { markSubmitAttempted } from '../queue/queueClient.js';
+
+// #cbFilingAffir exists only on the review step, so seeing it means the document POST landed and
+// the filing advanced. This is what keeps an upload retry from attaching the same PDF twice.
+async function isOnReviewStep(page: Page): Promise<boolean> {
+    return page
+        .locator('#cbFilingAffir')
+        .isVisible()
+        .catch(() => false);
+}
 
 const NYSCEF_DOC_TYPES = {
     EVIDENCE_EXHIBIT: 'EXHIBIT(S)',
@@ -270,30 +282,80 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
         }
 
         console.log(`Uploading document file for ParcelID: ${doc.parcelID}...`);
+        const fileUpload = {
+            name: `${doc.type.toString().toUpperCase()}_${doc.type === DocumentType.EVIDENCE ? doc.identifier.toUpperCase() : ''}${doc.parcelID}.pdf`,
+            mimeType: 'application/pdf',
+            buffer: doc.docBuffer,
+        };
+
+        // Selecting the file is idempotent — re-setting the input replaces the selection rather than
+        // adding a second one — but clicking Next is not: it POSTs the document to NYSCEF, and a
+        // click that reports a timeout may still have landed. Retrying that blindly attaches the
+        // same PDF to the filing twice, so every attempt first asks whether a previous one already
+        // carried us through to the review step.
         await retry(async () => {
-            await page.setInputFiles('#txtFileName_1', {
-                name: `${doc.type.toString().toUpperCase()}_${doc.type === DocumentType.EVIDENCE ? doc.identifier.toUpperCase() : ''}${doc.parcelID}.pdf`,
-                mimeType: 'application/pdf',
-                buffer: doc.docBuffer,
-            });
+            if (await isOnReviewStep(page)) return;
+
+            await page.setInputFiles('#txtFileName_1', fileUpload);
             await page.waitForTimeout(1000); // wait for upload to register
-            // Clicking Next submits the multi-MB PDF; the POST + navigation routinely
-            // exceeds the 5s default nav timeout, so give this submit a real budget.
-            await page.click('#btnNext', { timeout: 60000 });
+            try {
+                // Clicking Next submits the multi-MB PDF; the POST + navigation routinely
+                // exceeds the 5s default nav timeout, so give this submit a real budget.
+                await page.click('#btnNext', { timeout: 60000 });
+            } catch (error) {
+                // Same reasoning as the final submit: the navigation can outlive the click's
+                // timeout, so the page is the authority on what happened, not the click.
+                console.warn(`Next click did not complete cleanly for ParcelID: ${doc.parcelID}; checking the page before retrying.`, error);
+            }
+
+            if (!(await isOnReviewStep(page))) throw new Error('Document upload did not reach the review step.');
         }, 'Error uploading document file');
 
         // submit filing
         console.log(`Submitting filing...`);
+
+        // Ticking the affirmation box is idempotent and safe to retry. Pressing submit is not:
+        // once #btnSubmit is clicked the POST may reach the court even if the click reports a
+        // timeout, so everything below runs exactly once and failures are classified rather than
+        // retried. Re-running this block is how the same stipulation gets filed twice.
         await retry(async () => {
             await page.check('#cbFilingAffir');
-            if (testing) {
-                console.log('Testing mode enabled - skipping final submission.');
-            } else {
-                await page.click('#btnSubmit', { timeout: 60000 });
-                await page.waitForTimeout(2000);
-            }
+        }, 'Error affirming filing');
+
+        if (testing) {
+            console.log('Testing mode enabled - skipping final submission.');
             doc.hasBeenUploaded = true;
-        }, 'Error submitting filing');
+        } else {
+            // Stamp the queue row before the click, not after. If the process dies anywhere from
+            // here to the status write, this is the only evidence that a filing left our side —
+            // and it is what stops the stuck-item sweep from re-filing a document the court may
+            // already hold. A failure to record it means we would lose that distinction, so it is
+            // treated as fatal rather than submitting blind.
+            if (doc.queueItemID !== undefined) {
+                await markSubmitAttempted(doc.queueItemID);
+            }
+
+            try {
+                await page.click('#btnSubmit', { timeout: 60000 });
+            } catch (error) {
+                // The click reported a failure, but the navigation it kicks off routinely outlives
+                // the timeout on a multi-MB filing. Fall through to verification rather than
+                // assuming either outcome from the click alone.
+                console.warn(`Submit click did not complete cleanly for ParcelID: ${doc.parcelID}; verifying against the page.`, error);
+            }
+
+            const verdict = await verifySubmission(page);
+            console.log(`Submission verdict for ParcelID: ${doc.parcelID}: ${verdict.status} — ${verdict.detail}`);
+            if (verdict.pageExcerpt) {
+                console.log(`Page text at verification for ParcelID: ${doc.parcelID}: ${verdict.pageExcerpt}`);
+            }
+
+            if (verdict.status === 'REJECTED') throw new RejectedSubmissionError(verdict.detail);
+            if (verdict.status === 'UNKNOWN') throw new UnverifiedSubmissionError(verdict.detail);
+
+            doc.confirmationRef = verdict.confirmationRef;
+            doc.hasBeenUploaded = true;
+        }
     } catch (error) {
         console.error(`Error uploading document for ParcelID: ${doc.parcelID}`, error);
         throw error;
