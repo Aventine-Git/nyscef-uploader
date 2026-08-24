@@ -9,15 +9,19 @@ import { recordUploadSuccess, recordUploadFailure } from '../helpers/uploadHealt
 import { enterCooldown, clearCooldown } from '../helpers/cfCooldown.js';
 import { CloudflareBlockError, UnverifiedSubmissionError } from '../errors.js';
 import { Document, DocumentType } from '../types.js';
+import { updateIngestTrackingStatus } from '../shared_helpers/ingestTracking.js';
+import { IngestStatus } from '../shared_helpers/types.js';
 import {
     QueueItem,
     claimQueueItem,
     countPendingItemsForIngest,
     getExhaustedItems,
     getAllPendingItems,
+    getIngestItemCounts,
     getItemsForIngest,
     getQueueItemById,
     getRetryItems,
+    isIngestHandedOff,
     markNeedsReview,
     markFailed,
     markSkipped,
@@ -26,6 +30,14 @@ import {
 } from './queueClient.js';
 
 const MAX_ATTEMPTS = 3;
+
+// How long an ingest may sit in Received/Processing before we stop waiting for its producer to
+// finish queueing. Matches the stuck-item sweep's own 15-minute threshold.
+const HANDOFF_STALE_MINUTES = 15;
+
+// Item statuses that mean the page got where it was going. SKIPPED counts: it means the document was
+// already on the docket, which is an outcome, not a failure.
+const SUCCESSFUL_ITEM_STATUSES = ['Uploaded', 'Skipped'];
 
 // Sweeps rows abandoned in PROCESSING, and pages a human for the ones that had already been
 // submitted to NYSCEF when the run died. Those are moved to NEEDS_REVIEW rather than FAILED so
@@ -49,6 +61,13 @@ async function recoverStuckItems(): Promise<void> {
 
 async function notifyIfIngestComplete(ingestID: number | undefined, testing: boolean): Promise<void> {
     if (!ingestID) return; // legacy items without an IngestID — direct.ts handles notification
+
+    // The producer may still be queueing. Checked before the pending count because with one row
+    // written so far and that row uploaded, "nothing pending" is true and completely wrong.
+    if (!(await isIngestHandedOff(ingestID, HANDOFF_STALE_MINUTES))) {
+        console.log(`IngestID=${ingestID}: producer has not finished handing off (still Received/Processing) — deferring.`);
+        return;
+    }
 
     // "Pending" includes FAILED items that still have retries left — so a failure
     // notification is only sent once the item is exhausted (Attempts >= MAX_ATTEMPTS) and
@@ -107,6 +126,51 @@ async function notifyIfIngestComplete(ingestID: number | undefined, testing: boo
             console.error('Failed to send batch clerk email:', clerkErr);
         }
     }
+
+    // Close the ingest. This is the only place the queue path writes a terminal status — the
+    // producers hand off at UPLOADING and stop, so without this every run that reached NYSCEF sat at
+    // Processing indefinitely.
+    //
+    // Judged on the ingest's item ledger rather than the queue rows above: the queue holds only the
+    // NYSCEF half of a run, so on a mixed batch (ingest 1354 was 4 BAR + 21 SCAR) a wholly-failed
+    // queue would otherwise write Failed over four documents that did reach the portal. Evidence and
+    // misc ingests keep no ledger, so those fall back to the queue counts.
+    //
+    // Last, and swallowed: a notification the team can act on matters more than the status column,
+    // and this must not be able to suppress one.
+    try {
+        const itemCounts = await getIngestItemCounts(ingestID);
+        const { status, summary } = resolveIngestOutcome(itemCounts, { uploadedCount, skippedCount, resultStr });
+        await updateIngestTrackingStatus(ingestID, status, summary.substring(0, 450));
+    } catch (statusErr) {
+        console.error(`Failed to write terminal status for IngestID=${ingestID}:`, statusErr);
+    }
+}
+
+/**
+ * Decide a finished ingest's terminal status from its own ledger, falling back to the queue.
+ *
+ * Split out from `notifyIfIngestComplete` because the mixed-batch case is the whole point and is
+ * otherwise unreachable to a test: the queue holds only the NYSCEF half of a run, so a batch of
+ * 4 BAR + 21 SCAR pages (ingest 1354) whose 21 queued pages all failed still filed four documents to
+ * the portal. Judging on queue counts alone would call that a total loss.
+ *
+ * `Failed` therefore means nothing in the run got anywhere — not merely that the queued part didn't.
+ */
+export function resolveIngestOutcome(
+    itemCounts: Map<string, number>,
+    queue: { uploadedCount: number; skippedCount: number; resultStr: string }
+): { status: IngestStatus; summary: string } {
+    // Evidence and misc ingests keep no item ledger, so an empty map means "no ledger", not "no work".
+    if (itemCounts.size === 0) {
+        const succeeded = queue.uploadedCount > 0 || queue.skippedCount > 0;
+        return { status: succeeded ? IngestStatus.Done : IngestStatus.FAILED, summary: queue.resultStr };
+    }
+    const succeeded = SUCCESSFUL_ITEM_STATUSES.some((s) => (itemCounts.get(s) ?? 0) > 0);
+    return {
+        status: succeeded ? IngestStatus.Done : IngestStatus.FAILED,
+        summary: [...itemCounts.entries()].map(([status, n]) => `${n} ${status}`).join(', '),
+    };
 }
 
 async function processItem(item: QueueItem, notifyOnComplete = true): Promise<void> {

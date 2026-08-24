@@ -17,8 +17,38 @@ export interface QueueItem {
     Identifier: string; // disposition code for stipulations, evidence type for evidence, NYSCEF doc-type code for misc
     Description: string | null; // NYSCEF document description; misc docs only — exhibit description (EXHIBIT) or Additional Document Information box (LETTER)
     ExhibitLabelMode: string | null; // 'NUMBER' | 'LETTER'; null = auto. Overrides exhibit label style.
+    /**
+     * `Court.NyscefUploadQueue.Status ENUM(...) NOT NULL DEFAULT 'QUEUED'` — manually managed, like
+     * DocumentType, and not created by any repo, so this union is the definition of record. Writing a
+     * value the column lacks fails with errno 1265 ("Data truncated").
+     *
+     * NEEDS_REVIEW (added 2026-08-19) exists because post-submit verification has three outcomes and
+     * the third had no safe home: CONFIRMED -> UPLOADED, REJECTED -> FAILED (court refused it,
+     * nothing filed, safe to retry), UNKNOWN -> NEEDS_REVIEW (submit was pressed, outcome unreadable,
+     * MAY be on the docket). UNKNOWN cannot be FAILED: `claimQueueItem` and `getAllPendingItems` both
+     * select `Status IN ('QUEUED','FAILED')` with no attempt filter, and `resetStuckProcessingItems`
+     * pushes PROCESSING -> FAILED after 15 minutes, so anything reaching FAILED is re-filed
+     * automatically — a duplicate court filing for a document the court may already hold.
+     * NEEDS_REVIEW matches none of those queries, so it is terminal for every automated path and is
+     * cleared only by a human who has checked the docket.
+     *
+     * Keep in sync wherever statuses are rendered or filtered, or NEEDS_REVIEW shows as unknown:
+     * this union, and aventine-v2's ingest/queue status display.
+     */
     Status: 'QUEUED' | 'PROCESSING' | 'UPLOADED' | 'FAILED' | 'SKIPPED' | 'NEEDS_REVIEW';
     Attempts: number;
+    /**
+     * `SubmittedAt DATETIME NULL` (added 2026-08-19). Stamped immediately *before* #btnSubmit is
+     * clicked, so it answers the question a crash otherwise leaves open: a run that dies mid-filing
+     * leaves its row in PROCESSING, and whether that row is safe to retry depends entirely on whether
+     * the submit had already gone out. NULL means it had not (clean failure, retry it); non-NULL means
+     * it had (may be on the docket, needs a human) — which is why `resetStuckProcessingItems` only
+     * sweeps PROCESSING rows with `SubmittedAt IS NULL`.
+     *
+     * Rows predating the column are all NULL, which is correct: they are terminal already, and this is
+     * only ever read for rows sitting in PROCESSING.
+     */
+    SubmittedAt: Date | null;
     ErrorMessage: string | null;
     IngestID: number | null;
     RealFrom: string | null;
@@ -129,6 +159,70 @@ export async function countPendingItemsForIngest(ingestID: number, maxAttempts: 
         [ingestID, maxAttempts]
     );
     return Number(rows[0].cnt);
+}
+
+/**
+ * Has the producing lambda finished handing this ingest over?
+ *
+ * `pending == 0` alone is not a completion signal. stipulation-ingest inserts one queue row at a
+ * time inside its page loop, so an ingest whose first row is already uploaded may have forty more
+ * still to be written — ingest 1506 completed its first item seven seconds *before* its last row was
+ * inserted, and ingest 1445 gained a row 2h19m after its previous thirty had all finished. Acting on
+ * "nothing pending" then closes and notifies a run that has barely begun.
+ *
+ * The producer's own status is the handoff flag: it writes UPLOADING once every page has been queued
+ * (or a terminal status if it queued nothing), so anything still reading Received/Processing means
+ * more rows may be coming.
+ *
+ * `staleAfterMinutes` is the escape hatch. A producer that dies mid-loop would otherwise pin the
+ * ingest at Processing and suppress its notification forever, which is worse than the premature one.
+ * LastAccessTimestamp is bumped by UpdateIngestItemStatus on every item, so it is a live heartbeat
+ * while the producer is working.
+ */
+export async function isIngestHandedOff(ingestID: number, staleAfterMinutes: number): Promise<boolean> {
+    const rows = (await executeSQLQuery(
+        `SELECT Status, LastAccessTimestamp < NOW() - INTERVAL ? MINUTE AS IsStale
+           FROM IngestTracking.Ingest WHERE IngestID = ?`,
+        [staleAfterMinutes, ingestID]
+    )) as Array<{ Status: string; IsStale: number | null }>;
+
+    // No row: a queue item pointing at an ingest that does not exist. Nothing can ever move it, so
+    // treat it as handed off rather than deferring on it forever.
+    if (!rows.length) {
+        console.warn(`IngestID=${ingestID}: no IngestTracking.Ingest row — treating as handed off (nothing can ever advance it).`);
+        return true;
+    }
+    const { Status, IsStale } = rows[0];
+    if (Status !== 'Received' && Status !== 'Processing') return true;
+    // Say so loudly. Proceeding here means finalising a run whose producer never announced it had
+    // finished queueing, so any "why did this notify early / short" question starts at this line.
+    if (IsStale === 1) {
+        console.warn(
+            `IngestID=${ingestID}: still ${Status} but untouched for >${staleAfterMinutes}m — ` +
+                `producer presumed dead, finalising without a handoff signal.`
+        );
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Per-status page counts from the ingest's own ledger.
+ *
+ * Used instead of the queue rows to decide Done vs Failed, because the queue only ever holds the
+ * NYSCEF half of a run. Westchester pages are emailed to the clerk and BAR pages pushed to portal S3
+ * — both finish inside the producer and never appear here — so judging by queue rows alone would
+ * write Failed over a run whose other half succeeded. Ingest 1354 is that shape: 4 BAR + 21 SCAR.
+ *
+ * Returns an empty map for ingests that keep no item ledger (evidence and misc create none), which
+ * is the caller's signal to fall back to queue-row counts.
+ */
+export async function getIngestItemCounts(ingestID: number): Promise<Map<string, number>> {
+    const rows = (await executeSQLQuery(
+        `SELECT ItemStatus, COUNT(*) AS n FROM IngestTracking.IngestItem WHERE IngestID = ? GROUP BY ItemStatus`,
+        [ingestID]
+    )) as Array<{ ItemStatus: string; n: number }>;
+    return new Map(rows.map((r) => [r.ItemStatus, Number(r.n)]));
 }
 
 export async function getItemsForIngest(ingestID: number): Promise<QueueItem[]> {
