@@ -24,6 +24,16 @@ export type GmailMsg = {
     requestId?: number;
 };
 
+// Mirrors _SHARED/src/types.ts in the lambdas repo. This directory is a vendored copy of that
+// library; keep the two identical rather than letting a variant grow here.
+export enum IngestStatus {
+    RECEIVED = 'Received',
+    PROCESSING = 'Processing',
+    UPLOADING = 'Uploading',
+    Done = 'Done',
+    FAILED = 'Failed',
+}
+
 export enum IngestItemStatus {
     QUEUED = 'Queued',
     SKIPPED = 'Skipped',
