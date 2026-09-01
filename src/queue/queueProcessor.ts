@@ -112,7 +112,11 @@ async function notifyIfIngestComplete(ingestID: number | undefined, testing: boo
             .filter(Boolean)
             .join(', ') || 'None processed';
 
-    await notifyResults(resultStr, docs, undefined, undefined, testing, failedCount > 0, wasRetried);
+    // Whoever asked for this ingest, so the notification reaches them rather than a shared channel.
+    // Every row in an ingest is queued by the same caller, so the first one set speaks for all.
+    const requestedBy = items.map((item) => item.RealFrom).find((from) => !!from) ?? '';
+
+    await notifyResults(resultStr, docs, undefined, undefined, testing, failedCount > 0, wasRetried, requestedBy);
 
     // Batch clerk email — send once for all uploaded stips in this ingest
     const uploadedStipItems = items.filter((i) => i.Status === 'UPLOADED' && i.DocumentType === DocumentType.STIPULATION);

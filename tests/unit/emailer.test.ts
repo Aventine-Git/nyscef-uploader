@@ -6,6 +6,7 @@ vi.mock('../../src/shared_helpers/lambda.js', () => ({
 vi.mock('../../src/shared_helpers/sql.js', () => ({
     executeSQLQuery: vi.fn(),
     getUserDetails: vi.fn().mockResolvedValue(null),
+    getUserByEmail: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../../src/shared_helpers/s3.js', () => ({
     putS3: vi.fn().mockResolvedValue(undefined),
@@ -20,7 +21,7 @@ vi.mock('../../src/helpers/buffer.js', () => ({
 }));
 
 import { invokeLambda } from '../../src/shared_helpers/lambda.js';
-import { executeSQLQuery, getUserDetails } from '../../src/shared_helpers/sql.js';
+import { executeSQLQuery, getUserDetails, getUserByEmail } from '../../src/shared_helpers/sql.js';
 
 import { formatDataTable } from '../../src/emailer/formatDataTable.ts';
 import { getClerkEmail } from '../../src/emailer/getClerkEmail.ts';
@@ -31,6 +32,7 @@ import { Document, DocumentType } from '../../src/types.ts';
 
 const mockSQL = vi.mocked(executeSQLQuery);
 const mockGetUserDetails = vi.mocked(getUserDetails);
+const mockGetUserByEmail = vi.mocked(getUserByEmail);
 const mockInvoke = vi.mocked(invokeLambda);
 
 beforeEach(() => vi.clearAllMocks());
@@ -220,6 +222,29 @@ describe('notifyResults — recipients', () => {
         expect(msg.slackChannel).toEqual([]);
     });
 
+    // Exhibit filings are queued without a NegotiatorID, so the old success path always fell
+    // through to C082FUMUCJ1. RealFrom is who asked for the upload.
+    it('on exhibit success, DMs the uploader instead of the case-negotiation channel', async () => {
+        mockGetUserByEmail.mockResolvedValueOnce({ email: 'manny@aventine.ai', slackID: 'UMANNY', fullName: 'Manny', userId: 12 } as any);
+
+        await notifyResults(
+            '1 Uploaded',
+            [doc({ type: DocumentType.MISC, identifier: 'EXHIBIT', negotiatorID: null })],
+            undefined,
+            undefined,
+            false,
+            false,
+            false,
+            'manny@aventine.ai'
+        );
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.slackChannel).toEqual(['UMANNY']);
+        expect(msg.slackChannel).not.toContain('C082FUMUCJ1');
+        expect(msg.emailAddresses).toEqual(['manny@aventine.ai']);
+    });
+});
+
+describe('notifyResults — email fallbacks', () => {
     // Regression: an unresolved negotiator on a successful upload left emailAddresses empty,
     // which SES rejected as "Empty required header 'To'" -> notifier 400 -> MAJOR incident.
     it('on success with no negotiator resolved, falls back to NOTIFY_RECIPIENTS', async () => {
@@ -229,6 +254,7 @@ describe('notifyResults — recipients', () => {
         await notifyResults('5 Uploaded', [doc()], undefined, undefined, false, false);
         const msg = mockInvoke.mock.calls[0][1] as any;
         expect(msg.emailAddresses).toEqual(['ops@aventine.ai']);
+        expect(msg.slackChannel).toEqual([]);
     });
 
     it('on success with a negotiator who has no email, falls back to NOTIFY_RECIPIENTS', async () => {

@@ -54,7 +54,7 @@ Authenticated with AWS IAM (SigV4, service `lambda`, region `us-east-1`) — you
 | `nyscefDocType` | No | `EXHIBIT` (default) or `LETTER`. See below. |
 | `description` | No | Free-text label shown on the NYSCEF filing. For `EXHIBIT` it's the exhibit description; for `LETTER` it fills the "Additional Document Information" box. |
 | `exhibitLabelMode` | No | `NUMBER` or `LETTER`. Leave it off — labels resolve automatically. See below. |
-| `realFrom` | No | Your email, for the audit trail. |
+| `realFrom` | No | Your email. Used for the audit trail **and** to notify you when the filing completes — send the address you want the Slack DM and email to reach. Without it, the notification falls back to the case negotiator. |
 | `testing` | No | `true` = run the whole pipeline but don't actually file. |
 | `forceUpload` | No | `true` = file it even if it looks like a duplicate. |
 
