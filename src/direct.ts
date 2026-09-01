@@ -100,9 +100,9 @@ export async function processDirectInvocation(event: EventInput): Promise<void> 
         const resultStr =
             [uploadedCount > 0 ? `${uploadedCount} Uploaded` : '', skippedCount > 0 ? `${skippedCount} Skipped (already uploaded)` : ''].filter(Boolean).join(', ') ||
             'None processed';
-        await notifyResults(resultStr, output, undefined, undefined, testing);
+        await notifyResults(resultStr, output, undefined, undefined, testing, false, false, realFrom);
     } catch (error: any) {
-        await notifyResults(error.message, docs, error.failedDoc, error.screenshot, testing, true);
+        await notifyResults(error.message, docs, error.failedDoc, error.screenshot, testing, true, false, realFrom);
         throw error;
     }
 }

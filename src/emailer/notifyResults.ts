@@ -1,5 +1,5 @@
 import { invokeLambda } from '../shared_helpers/lambda.js';
-import { getUserDetails } from '../shared_helpers/sql.js';
+import { getUserByEmail, getUserDetails } from '../shared_helpers/sql.js';
 import { User, NotifierMsg } from '../shared_helpers/types.js';
 import { findFirstValidCountyCode } from '../helpers/countyCode.js';
 import { findFirstValidNegotiatorID } from '../helpers/negotiator.js';
@@ -15,19 +15,60 @@ import { reportIncident } from '../shared_helpers/reporter.js';
  * unset one, and the message still has to reach somebody.
  */
 function resolveDefaultRecipients(): string[] {
-    const configured = (process.env.NOTIFY_RECIPIENTS || '')
-        .split(',')
-        .map((email) => email.trim())
-        .filter((email) => email.length > 0);
+    const configured = envList('NOTIFY_RECIPIENTS');
     return configured.length > 0 ? configured : ['catherine@aventine.ai'];
 }
 
-export async function notifyResults(result: string, documents: Document[], failedDoc?: Document, screenshot?: Buffer, testing: boolean = false, isError: boolean = false, wasRetried: boolean = false) {
+/** Comma-separated env var → trimmed, non-empty entries. */
+function envList(name: string): string[] {
+    const raw: string = process.env[name] || '';
+    return raw
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+}
+
+/** Unique, non-empty values, in the order given: the notifier posts once per entry, so a repeated
+ *  recipient — the uploader who is also the case negotiator — would get two of the same message. */
+function uniqueRecipients(values: (string | null | undefined)[]): string[] {
+    const present = values.map((value) => value?.trim()).filter((value): value is string => !!value);
+    return [...new Set(present)];
+}
+
+/**
+ * The person who asked for this filing. `realFrom` is an audit-trail field, so it holds whatever
+ * the caller sent: an address for a human-initiated upload, but a script name for the scheduled
+ * ones ("Motions To Preclude Upload Script"). Only an address can be matched to an account, and a
+ * failed lookup must not sink the notification, so anything else resolves to null.
+ */
+async function resolveUploader(realFrom: string): Promise<User | null> {
+    const candidate = realFrom.trim();
+    if (!candidate.includes('@')) return null;
+    try {
+        return await getUserByEmail(candidate);
+    } catch (err: unknown) {
+        console.warn(`Could not resolve uploader ${candidate}: ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+    }
+}
+
+export async function notifyResults(
+    result: string,
+    documents: Document[],
+    failedDoc?: Document,
+    screenshot?: Buffer,
+    testing: boolean = false,
+    isError: boolean = false,
+    wasRetried: boolean = false,
+    realFrom: string = ''
+) {
     const negotiatorID = findFirstValidNegotiatorID(documents);
     let negotiator: User | null = null;
     if (negotiatorID !== null) {
         negotiator = await getUserDetails(negotiatorID);
     }
+
+    const uploader = await resolveUploader(realFrom);
 
     const municode = findFirstValidCountyCode(documents);
     const countyCode = municode ? municode : 'Unknown County';
@@ -48,27 +89,23 @@ export async function notifyResults(result: string, documents: Document[], faile
 
     let recipients: string[];
     let slackRecipients: string[];
-    const genericChannel = 'C082FUMUCJ1';
 
     if (isSuccess) {
-        // Success: notify negotiator; if this was a retry, also notify default recipients so
-        // they see the resolution after receiving the earlier failure notification.
-        recipients = negotiator?.email ? [negotiator.email] : [];
-        slackRecipients = negotiator?.slackID ? [negotiator.slackID] : [genericChannel];
+        // Success: notify whoever asked for the filing, then the case negotiator. Slack is DM-only
+        // — with nobody resolved we send no Slack rather than falling back to a shared channel,
+        // which is what made every exhibit upload (queued with no NegotiatorID) channel noise.
+        // If this was a retry, also notify default recipients so they see the resolution
+        // after receiving the earlier failure notification.
+        recipients = uniqueRecipients([uploader?.email, negotiator?.email]);
+        slackRecipients = uniqueRecipients([uploader?.slackID, negotiator?.slackID]);
         if (wasRetried) {
-            recipients = [...new Set([...resolveDefaultRecipients(), ...recipients])];
-            const defaultSlack = (process.env.NOTIFY_SLACK_RECIPIENTS || '').split(',').map((id) => id.trim()).filter((id) => id.length > 0);
-            slackRecipients = [...new Set([...defaultSlack, ...slackRecipients])];
+            recipients = uniqueRecipients([...resolveDefaultRecipients(), ...recipients]);
+            slackRecipients = uniqueRecipients([...envList('NOTIFY_SLACK_RECIPIENTS'), ...slackRecipients]);
         }
     } else {
-        // Error: notify default recipients + negotiator
-        recipients = resolveDefaultRecipients();
-        slackRecipients = (process.env.NOTIFY_SLACK_RECIPIENTS || '')
-            .split(',')
-            .map((id) => id.trim())
-            .filter((id) => id.length > 0);
-        if (negotiator?.email) recipients.push(negotiator.email);
-        if (negotiator?.slackID) slackRecipients.push(negotiator.slackID);
+        // Error: notify default recipients + uploader + negotiator
+        recipients = uniqueRecipients([...resolveDefaultRecipients(), uploader?.email, negotiator?.email]);
+        slackRecipients = uniqueRecipients([...envList('NOTIFY_SLACK_RECIPIENTS'), uploader?.slackID, negotiator?.slackID]);
     }
 
     if (testing) {
@@ -77,13 +114,11 @@ export async function notifyResults(result: string, documents: Document[], faile
         slackRecipients = []; // its messaged to me anyways
     }
 
-    // Slack degrades to a generic channel when the negotiator is unresolved; email had no such
-    // fallback, so a successful upload with no negotiator email produced an empty recipient list.
-    // SES rejects that with "Empty required header 'To'" — a 400 that surfaced as a MAJOR incident
-    // for an upload that had actually gone through. Never hand the notifier an empty list.
-    recipients = recipients.map((email) => email.trim()).filter((email) => email.length > 0);
+    // Slack is optional (an empty list means no DM). Email is not: SES rejects an empty To
+    // header with a 400 that surfaced as a MAJOR incident for an upload that had gone through.
+    // Never hand the notifier an empty email list.
     if (recipients.length === 0) {
-        console.warn('No negotiator email resolved for this upload - falling back to default notification recipients.');
+        console.warn('No uploader or negotiator email resolved for this upload - falling back to default notification recipients.');
         recipients = resolveDefaultRecipients();
     }
 
