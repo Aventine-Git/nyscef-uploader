@@ -60,3 +60,24 @@ export async function getUserDetails(userId: number): Promise<User | null> {
     }
     return null;
 }
+
+/**
+ * Look a user up by email, for callers that know who asked for something (an upload's RealFrom)
+ * but not their UserID. Matched case-insensitively: these addresses come from email headers and
+ * hand-written API payloads.
+ */
+export async function getUserByEmail(email: string): Promise<User | null> {
+    const query = `SELECT UserID, UserFirstName, UserLastName, SlackID, UserEmail FROM Users WHERE LOWER(UserEmail) = LOWER(?) LIMIT 1`;
+    const result = await executeSQLQuery(query, [email.trim()]);
+    if (result.length > 0) {
+        return {
+            userId: result[0].UserID,
+            fullName: `${result[0].UserFirstName} ${result[0].UserLastName}`,
+            firstName: result[0].UserFirstName,
+            lastName: result[0].UserLastName,
+            slackID: result[0].SlackID,
+            email: result[0].UserEmail,
+        };
+    }
+    return null;
+}
