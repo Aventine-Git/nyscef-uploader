@@ -2,9 +2,9 @@ import { Page } from 'playwright-core';
 import { retry } from '../helpers/retry.js';
 import { classifyStip, Document, DocumentType, ExhibitLabelMode } from '../types.js';
 import { getNyscefFilerName } from './credentials.js';
-import { verifySubmission } from './verifySubmission.js';
+import { SubmissionStatus, verifySubmission } from './verifySubmission.js';
 import { RejectedSubmissionError, UnverifiedSubmissionError } from '../errors.js';
-import { markSubmitAttempted } from '../queue/queueClient.js';
+import { markSubmitAttempted, recordExhibitLabel } from '../queue/queueClient.js';
 
 // #cbFilingAffir exists only on the review step, so seeing it means the document POST landed and
 // the filing advanced. This is what keeps an upload retry from attaching the same PDF twice.
@@ -171,6 +171,46 @@ export function filterToOurExhibits(scraped: ScrapedExhibit[], ourFilerName: str
     return ours.map((e) => e.label);
 }
 
+/**
+ * Labels appearing more than once among the exhibits filed under our name.
+ *
+ * `computeNextExhibitLabel` answers only "what comes next" — it takes max+1 and never inspects the
+ * set it was handed. That is correct for picking a label and blind to the docket already being
+ * inconsistent, which is what happened on 803936/2025: the uploader scraped `1, 2, 3, 4, 3`,
+ * correctly filed 5, and nothing said there were two Exhibit 3s. The duplicate had been filed by
+ * hand on the shared NYSCEF login hours after the uploader took 3.
+ *
+ * A log line and nothing more, on purpose. The labels are the court's record and cannot be
+ * renumbered from here, so there is no action to take — and an alert would be worse than useless: a
+ * duplicate is permanent, so it would re-fire on every later filing to the same case forever.
+ * `ExhibitDocketSnapshot` is where this becomes queryable after the fact.
+ */
+export function auditOurExhibitLabels(ourExistingLabels: string[]): string[] {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const label of ourExistingLabels) {
+        if (seen.has(label)) duplicates.add(label);
+        seen.add(label);
+    }
+    return [...duplicates];
+}
+
+/**
+ * Whether a submit verdict means the exhibit label is worth recording.
+ *
+ * CONFIRMED and UNKNOWN both mean a document did, or may have, reached the court — and UNKNOWN is
+ * the one that matters most, because a NEEDS_REVIEW row sends a human to the docket to look for a
+ * document and the exhibit number is how they find it.
+ *
+ * REJECTED does not: the court refused the filing, nothing is on the docket, and writing a number
+ * against it would put an exhibit label on a document that was never filed. Wrong data in a record
+ * with legal weight is worse than absent data — which is exactly what the first attempt at this got
+ * wrong by writing pre-submit, before any verdict existed.
+ */
+export function shouldRecordExhibitLabel(status: SubmissionStatus): boolean {
+    return status === 'CONFIRMED' || status === 'UNKNOWN';
+}
+
 // Files the document as an EXHIBIT(S): picks the next label (1, 2, 3… by default) from the exhibits
 // scraped off the DocumentList earlier in the flow, selects the exhibit doc type, and fills the
 // exhibit-number + description fields. Shared by the EVIDENCE path (description from the report
@@ -179,6 +219,22 @@ async function selectExhibitDocType(page: Page, doc: Document, description: stri
     const ourLabels = filterToOurExhibits(existingExhibits, await getNyscefFilerName());
     const nextExhibitLabel = computeNextExhibitLabel(ourLabels, doc.exhibitLabelMode, doc.scarID);
     console.log(`Next exhibit label to use: ${nextExhibitLabel}`);
+
+    const duplicates = auditOurExhibitLabels(ourLabels);
+    if (duplicates.length > 0) {
+        console.warn(
+            `⚠️ Case ${doc.scarID} (ParcelID ${doc.parcelID}) already carries duplicate exhibit label(s) ${duplicates.join(', ')} ` +
+                `among the exhibits filed under our name [${ourLabels.join(', ')}]. Filing as ${nextExhibitLabel} regardless — the ` +
+                `existing labels are the court's record. The usual cause is an exhibit filed by hand on the shared NYSCEF login ` +
+                `reusing a label the uploader had already taken.`
+        );
+    }
+
+    // Carried on the doc, not written yet: nothing has been submitted at this point, and a label
+    // recorded against a filing that never happens is the failure mode this design exists to avoid.
+    // Persisted after the verdict — see shouldRecordExhibitLabel.
+    doc.exhibitLabel = nextExhibitLabel;
+    doc.exhibitDocketSnapshot = `${ourLabels.join(',') || 'none'} of ${existingExhibits.length}`;
 
     page.on('dialog', async (dialog) => {
         console.log('Dialog message:', dialog.message());
@@ -348,6 +404,14 @@ export async function upload(page: Page, doc: Document, testing: boolean = false
             console.log(`Submission verdict for ParcelID: ${doc.parcelID}: ${verdict.status} — ${verdict.detail}`);
             if (verdict.pageExcerpt) {
                 console.log(`Page text at verification for ParcelID: ${doc.parcelID}: ${verdict.pageExcerpt}`);
+            }
+
+            // Before the throws, deliberately. UNKNOWN raises, and it is the verdict whose row most
+            // needs the label: it becomes NEEDS_REVIEW, and a human then has to find the document on
+            // the docket. Also after all browser work for this document is done, so the extra query
+            // on the single-connection pool cannot stall a filing mid-form.
+            if (doc.exhibitLabel && doc.queueItemID !== undefined && shouldRecordExhibitLabel(verdict.status)) {
+                await recordExhibitLabel(doc.queueItemID, doc.exhibitLabel, doc.exhibitDocketSnapshot ?? '');
             }
 
             if (verdict.status === 'REJECTED') throw new RejectedSubmissionError(verdict.detail);

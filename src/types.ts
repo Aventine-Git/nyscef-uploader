@@ -24,6 +24,16 @@ export interface Document {
     // stamp SubmittedAt before the filing is submitted, so a crash mid-filing can be told apart
     // from a crash before it. Undefined for direct invocations, which have no queue row.
     queueItemID?: number;
+    // The exhibit number/letter typed into #txtExhNumLet_1 ('3', 'B'…), and the docket we read to
+    // choose it ('1, 2, 3, 4, 3 of 6'). Set on the exhibit path only, as soon as the label is
+    // picked — but carried in memory rather than written there, because at that point nothing has
+    // been submitted yet. queueClient.recordExhibitLabel persists them after the verdict.
+    //
+    // The snapshot exists because the label alone is the less useful half: on 803936/2025 it was the
+    // scraped docket, not our own number, that revealed an exhibit filed by hand over a label we had
+    // already used.
+    exhibitLabel?: string;
+    exhibitDocketSnapshot?: string;
 }
 
 // How exhibits are labeled on a filing. NUMBER (1, 2, 3…) is the default: we file as the

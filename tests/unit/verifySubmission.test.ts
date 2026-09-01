@@ -37,6 +37,17 @@ describe('verifySubmission', () => {
         expect(verdict.confirmationRef).toBe('14');
     });
 
+    // "Confirmation Notice" is the heading on NYSCEF's own confirmation page, so it is present on
+    // essentially every successful filing. An unbounded `no` in the confirmation-ref pattern matched
+    // the "No" inside "Notice" and captured the "tice" after it — every filing in the 2026-08-25
+    // logs reported `ref tice`. A wrong reference is worse than none: it is the identifier a human
+    // would quote back to the court when asking what happened to a filing.
+    it('does not mistake the "No" in "Confirmation Notice" for a reference', async () => {
+        const verdict = await verifySubmission(fakePage({ bodyText: 'NYSCEF Confirmation Notice' }));
+        expect(verdict.status).toBe('CONFIRMED');
+        expect(verdict.confirmationRef).toBeUndefined();
+    });
+
     it('confirms without a reference when the page exposes none', async () => {
         const verdict = await verifySubmission(fakePage({ bodyText: 'Successfully filed.' }));
         expect(verdict.status).toBe('CONFIRMED');

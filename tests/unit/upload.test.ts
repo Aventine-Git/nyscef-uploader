@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { Page } from 'playwright-core';
-import { computeNextExhibitLabel, fillOptionalDescription, filterToOurExhibits, resolveMiscDocType } from '../../src/uploader/upload.ts';
+import { computeNextExhibitLabel, fillOptionalDescription, filterToOurExhibits, resolveMiscDocType, shouldRecordExhibitLabel } from '../../src/uploader/upload.ts';
+import { truncateDocketSnapshot } from '../../src/queue/queueClient.ts';
 import { Document, DocumentType, isArbitraryMiscDoc } from '../../src/types.ts';
 
 const EXHIBIT_LABEL = 'EXHIBIT(S)';
@@ -213,6 +214,35 @@ describe('computeNextExhibitLabel', () => {
         it('does not throw in NUMBER mode even past Z', () => {
             expect(computeNextExhibitLabel(['Z'], 'NUMBER', SCAR_ID)).toBe('1');
         });
+    });
+});
+
+describe('recording the exhibit label', () => {
+    // The first attempt at this recorded the label inside selectExhibitDocType, before the PDF was
+    // even attached — so a filing NYSCEF refused still left an exhibit number on the queue row, and
+    // anyone reading ExhibitLabel without also filtering Status would conclude we had put that
+    // number on a document. These rows describe court filings; a label for a filing that never
+    // happened is worse than no label at all.
+    it('does not record a label for a filing the court refused', () => {
+        expect(shouldRecordExhibitLabel('REJECTED')).toBe(false);
+    });
+
+    // UNKNOWN becomes NEEDS_REVIEW, which is terminal — nothing retries it, and a human has to go
+    // find the document on the docket. The exhibit number is how they find it, so this is the
+    // verdict where dropping the label costs the most.
+    it('records a label when the submit outcome is unreadable', () => {
+        expect(shouldRecordExhibitLabel('UNKNOWN')).toBe(true);
+    });
+
+    // ExhibitDocketSnapshot is VARCHAR(255) and a long-running case can exceed it. Under strict mode
+    // that is an error rather than a silent trim, and because recordExhibitLabel deliberately
+    // swallows its errors the whole record would vanish without a trace — losing exactly the
+    // docket-state evidence this column was added to preserve.
+    it('fits an oversized docket snapshot inside the column, marking what it dropped', () => {
+        const oversized = Array.from({ length: 200 }, (_, i) => String(i + 1)).join(',');
+        const result = truncateDocketSnapshot(oversized);
+        expect(result.length).toBeLessThanOrEqual(255);
+        expect(result).toMatch(/\.\.\.\+\d+ more$/);
     });
 });
 

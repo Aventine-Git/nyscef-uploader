@@ -49,7 +49,12 @@ const REJECTION_PATTERNS: RegExp[] = [
 
 // Reference formats NYSCEF shows on the confirmation step.
 // Group 1 must be the reference itself — every other group here is non-capturing on purpose.
-const CONFIRMATION_REF_PATTERNS: RegExp[] = [/nyscef\s+doc(?:ument)?\s*(?:no|#)\.?\s*:?\s*(\d+)/i, /confirmation\s*(?:no|#)\.?\s*:?\s*([\w-]+)/i];
+//
+// `no\b`, not `no`: NYSCEF's confirmation page is headed "Confirmation Notice", and an unbounded
+// `no` matched the "No" inside "Notice" and captured the "tice" after it — every filing in the
+// 2026-08-25 logs reported `ref tice`. The boundary still matches the abbreviation in "No." and
+// "No:" but never the start of a longer word.
+const CONFIRMATION_REF_PATTERNS: RegExp[] = [/nyscef\s+doc(?:ument)?\s*(?:no\b|#)\.?\s*:?\s*(\d+)/i, /confirmation\s*(?:no\b|#)\.?\s*:?\s*([\w-]+)/i];
 
 /**
  * Decide whether NYSCEF accepted the filing we just submitted.

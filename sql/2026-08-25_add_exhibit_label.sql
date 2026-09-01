@@ -1,0 +1,66 @@
+-- Court.NyscefUploadQueue: ExhibitLabel + ExhibitDocketSnapshot
+--
+-- ⚠️ NOT YET APPLIED. Run this BEFORE deploying the code that writes these columns — the write is
+-- additive and nothing reads them until that deploy, so migrating first costs nothing and skips a
+-- window where every exhibit filing logs an errno 1054 warning.
+--
+-- WHY
+-- ExhibitLabelMode already stores the requested *style* ('NUMBER' | 'LETTER'). Nothing stored the
+-- label actually typed into #txtExhNumLet_1, nor the docket we read to choose it. The only trace was
+-- two console.log lines in src/uploader/upload.ts, and `docker logs` reaches back only as far as the
+-- current container — docker-compose.yml rotates at 250 MB, but every `docker compose up --build`
+-- replaces the container and discards its history.
+--
+-- That bit on 2026-08-25. Case 803936/2025 came back with a duplicate Exhibit 3, and reconstructing
+-- who filed what depended entirely on the container happening to be 21 hours old and still holding
+-- the 02:15 lines. The 2026-08-14 filing on that same case was already unrecoverable. These are
+-- court filings; "what exhibit number did we put on that document?" has to be answerable in six
+-- months, and answerable by query across the portfolio rather than by grepping a log that may not
+-- exist any more.
+--
+-- TWO columns, not one, and deliberately so. ExhibitLabel alone would NOT have answered the
+-- 803936/2025 question — what identified the manual duplicate was the docket we scraped
+-- ("5 ours (1, 2, 3, 4, 3) of 6 total"), not the number we chose. ExhibitDocketSnapshot is that
+-- half. It is also what replaces an alert: a collision is findable with a SELECT, retroactively,
+-- instead of an incident that would re-fire on every later filing to an affected case.
+--
+-- SEMANTICS
+-- Written by queueClient.recordExhibitLabel *after* the submit verdict, and only when the verdict is
+-- CONFIRMED or UNKNOWN — i.e. only when a document did reach, or may have reached, the court.
+-- REJECTED filings and testing-mode runs write nothing, because an exhibit number recorded against a
+-- document that was never filed is worse than no record at all.
+--
+-- NULL therefore means "not an exhibit, or not recorded" — never "not filed". Rows predating this
+-- migration are all NULL and stay that way; no backfill is possible.
+--
+-- BLAST RADIUS
+-- Court.NyscefUploadQueue is ~8,660 rows / ~4.0 MB (INFORMATION_SCHEMA.TABLES, 2026-08-25). Small,
+-- but live: the worker's SQS poll loop and its 15-minute retry sweep both UPDATE this table
+-- continuously. An ADD COLUMN still needs a brief EXCLUSIVE metadata lock to begin, and a pending
+-- exclusive request parks at the head of the MDL queue and blocks every later reader — which is how
+-- the 2026-08-18 ALTER took the company offline for ~18 minutes without building anything.
+--
+-- Both columns go in ONE statement on purpose: one MDL acquisition, not two.
+--
+-- Run it in a watched window, with a human present, after the pre-flight below. Do not run it twice
+-- because the first "failed" — check INFORMATION_SCHEMA.PROCESSLIST first.
+
+-- Pre-flight 1 — nothing should be holding a long-lived MDL on the table:
+--
+--   SELECT t.PROCESSLIST_ID, t.PROCESSLIST_USER, t.PROCESSLIST_TIME, ml.LOCK_TYPE, ml.LOCK_STATUS
+--   FROM performance_schema.metadata_locks ml
+--   JOIN performance_schema.threads t ON t.THREAD_ID = ml.OWNER_THREAD_ID
+--   WHERE ml.OBJECT_NAME = 'NyscefUploadQueue' AND ml.LOCK_STATUS = 'GRANTED'
+--   ORDER BY t.PROCESSLIST_TIME DESC;
+--
+-- Pre-flight 2 — fail fast rather than jamming the queue behind us:
+--
+--   SET SESSION lock_wait_timeout = 10;
+
+ALTER TABLE Court.NyscefUploadQueue
+    ADD COLUMN ExhibitLabel VARCHAR(8) NULL AFTER ExhibitLabelMode,
+    ADD COLUMN ExhibitDocketSnapshot VARCHAR(255) NULL AFTER ExhibitLabel;
+
+-- Verify:
+--   SELECT COLUMN_NAME, COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+--   WHERE TABLE_SCHEMA = 'Court' AND TABLE_NAME = 'NyscefUploadQueue' AND COLUMN_NAME LIKE 'Exhibit%';
