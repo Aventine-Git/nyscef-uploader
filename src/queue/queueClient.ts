@@ -18,6 +18,24 @@ export interface QueueItem {
     Description: string | null; // NYSCEF document description; misc docs only — exhibit description (EXHIBIT) or Additional Document Information box (LETTER)
     ExhibitLabelMode: string | null; // 'NUMBER' | 'LETTER'; null = auto. Overrides exhibit label style.
     /**
+     * `ExhibitLabel VARCHAR(8) NULL` and `ExhibitDocketSnapshot VARCHAR(255) NULL` — what we filed
+     * this row as, and the docket we read to decide it. Written by `recordExhibitLabel`.
+     *
+     * Distinct from `ExhibitLabelMode`, which is only the requested *style*: the mode says "number
+     * me", these say we filed as Exhibit 5 on a case that already showed `1, 2, 3, 4, 3 of 6`.
+     *
+     * Optional, not `| null` alone: like every column on this table these are a manual migration
+     * (sql/2026-08-25_add_exhibit_label.sql), so before it is applied `SELECT *` returns rows with
+     * the keys absent entirely — typing them as always-present would have TypeScript promise `null`
+     * where the runtime hands back `undefined`.
+     *
+     * NULL/absent means "not an exhibit, or not recorded". It never means "not filed": the write is
+     * best-effort, happens only for CONFIRMED and UNKNOWN verdicts, and no backfill is possible for
+     * rows filed before the column existed.
+     */
+    ExhibitLabel?: string | null;
+    ExhibitDocketSnapshot?: string | null;
+    /**
      * `Court.NyscefUploadQueue.Status ENUM(...) NOT NULL DEFAULT 'QUEUED'` — manually managed, like
      * DocumentType, and not created by any repo, so this union is the definition of record. Writing a
      * value the column lacks fails with errno 1265 ("Data truncated").
@@ -104,6 +122,63 @@ export async function markSkipped(id: number): Promise<void> {
 // from a crash before the click ever happened.
 export async function markSubmitAttempted(id: number): Promise<void> {
     await executeSQLQuery(`UPDATE Court.NyscefUploadQueue SET SubmittedAt = NOW(), UpdatedAt = NOW() WHERE ID = ?`, [id]);
+}
+
+// Width of Court.NyscefUploadQueue.ExhibitDocketSnapshot.
+const DOCKET_SNAPSHOT_MAX = 255;
+
+/**
+ * Fits a docket snapshot inside its column, saying so when it does not.
+ *
+ * A case with enough exhibits overruns VARCHAR(255), and under strict mode that is an error, not a
+ * silent trim — which would throw away the whole record this column exists to keep (and quietly,
+ * since the write is deliberately swallowed). Truncating here keeps the useful head of the list and
+ * marks how much was dropped, so a short value is never mistaken for the complete docket.
+ *
+ * ASCII marker on purpose: this string is a DB value, and there is no reason to make it depend on
+ * the column's charset.
+ */
+export function truncateDocketSnapshot(snapshot: string, max: number = DOCKET_SNAPSHOT_MAX): string {
+    if (snapshot.length <= max) return snapshot;
+    const keep = Math.max(0, max - 12); // 12 reserved for the marker
+    // Final slice is the guarantee: whatever the marker's own length turns out to be, the result fits.
+    return `${snapshot.slice(0, keep)}...+${snapshot.length - keep} more`.slice(0, max);
+}
+
+let warnedMissingExhibitColumns = false;
+
+/**
+ * Records the exhibit number/letter this row was filed under, and the docket we read to choose it.
+ *
+ * Best-effort by construction, and a write of its own rather than columns on `markUploaded`'s
+ * UPDATE. Folding them in would mean an errno 1054 on a *successful* filing left the row in
+ * PROCESSING, where `resetStuckProcessingItems` reads its non-null SubmittedAt and escalates a
+ * filing that actually worked. This is metadata about a filing that has already happened; nothing
+ * about recording it may change that filing's recorded outcome.
+ *
+ * Deliberately does not touch UpdatedAt. That column drives the 15-minute stuck-item threshold, and
+ * a diagnostic write should not be able to push back when a genuinely stuck row is noticed.
+ */
+export async function recordExhibitLabel(id: number, exhibitLabel: string, docketSnapshot: string): Promise<void> {
+    try {
+        await executeSQLQuery(`UPDATE Court.NyscefUploadQueue SET ExhibitLabel = ?, ExhibitDocketSnapshot = ? WHERE ID = ?`, [
+            exhibitLabel,
+            truncateDocketSnapshot(docketSnapshot),
+            id,
+        ]);
+    } catch (err) {
+        // A missing column is a deployment-order fact, not a per-filing event: without this latch it
+        // would warn on every exhibit we file until the migration lands, which is how a warning
+        // becomes something people scroll past.
+        const missingColumn = (err as { code?: string })?.code === 'ER_BAD_FIELD_ERROR';
+        if (missingColumn && warnedMissingExhibitColumns) return;
+        if (missingColumn) warnedMissingExhibitColumns = true;
+        console.warn(
+            `Could not record exhibit label '${exhibitLabel}' for queue item ID=${id} (non-fatal; the filing itself is unaffected).` +
+                (missingColumn ? ' sql/2026-08-25_add_exhibit_label.sql has not been applied to this environment — further occurrences suppressed.' : ''),
+            err
+        );
+    }
 }
 
 // Recovers rows abandoned in PROCESSING by a run that died mid-filing.
