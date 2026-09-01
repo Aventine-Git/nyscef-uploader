@@ -6,6 +6,7 @@ vi.mock('node-fetch', () => ({ default: vi.fn() }));
 vi.mock('../../src/shared_helpers/sql.js', () => ({
     executeSQLQuery: vi.fn(),
     getUserDetails: vi.fn().mockResolvedValue(null),
+    getUserByEmail: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../../src/shared_helpers/s3.js', () => ({
     putS3: vi.fn().mockResolvedValue(true),

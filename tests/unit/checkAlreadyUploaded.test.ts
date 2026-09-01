@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../src/shared_helpers/sql.js', () => ({
     executeSQLQuery: vi.fn(),
     getUserDetails: vi.fn().mockResolvedValue(null),
+    getUserByEmail: vi.fn().mockResolvedValue(null),
 }));
 
 import { executeSQLQuery } from '../../src/shared_helpers/sql.js';
