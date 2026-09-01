@@ -90,6 +90,18 @@ QUEUED → PROCESSING → UPLOADED
 
 Notifications are deferred until all items for a given `IngestID` reach a terminal state (`UPLOADED`, `SKIPPED`, or `FAILED`). This sends one summary notification per ingest instead of one per document.
 
+### Who gets notified
+
+Slack is **DM-only** — the uploader first (matched from the queue row's `RealFrom` address), then the case
+negotiator. Neither resolving means no Slack message rather than a post to a shared channel: exhibit and
+misc filings are queued without a `NegotiatorID`, and a channel fallback turned every one of them into
+channel noise. The notifier posts to its own logging channel regardless, so nothing goes unrecorded.
+
+Email always goes somewhere — the uploader and negotiator when known, otherwise `NOTIFY_RECIPIENTS` — because
+SES rejects a message with no recipients, which would fail a notification for an upload that did reach NYSCEF.
+
+Failures additionally go to `NOTIFY_RECIPIENTS` / `NOTIFY_SLACK_RECIPIENTS`.
+
 ---
 
 ## Document Types
@@ -184,7 +196,7 @@ All credentials are in Secrets Manager — only infrastructure config goes in `.
 | `NYSCEF_QUEUE_URL` | Yes | SQS queue URL — AWS Console → SQS → your queue → copy URL |
 | `CF_INJECT_COOKIE` | Yes | Set to `true` — server has a fixed IP, so cookie injection is safe and prevents Cloudflare challenges |
 | `WARM_START_LOGIN` | No | `true` = browser launches at container startup so the first upload has no cold-start delay. Default: `false` |
-| `NOTIFY_RECIPIENTS` | No | Comma-separated email addresses to notify on upload results |
+| `NOTIFY_RECIPIENTS` | No | Comma-separated email addresses — the fallback when no uploader or negotiator is known, and always included on failures |
 | `NOTIFY_SLACK_RECIPIENTS` | No | Comma-separated Slack user IDs for error notifications |
 
 Secrets Manager secrets (not env vars):
