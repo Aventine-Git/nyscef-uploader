@@ -49,7 +49,7 @@ jobs:
       # owned by cat and writable. A laptop's ssh config and CI's DEPLOY_USER/DEPLOY_HOST
       # secrets can resolve to different users, and the router's port-forward to a different
       # host, so only CI can say who it actually was.
-      - name: Verify deploy directory is writable by the deploy user
+      - name: Verify the deploy user can write the tree and reach docker
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -86,6 +86,15 @@ jobs:
               echo "::error::cannot create a file in $dir as $me on $(hostname): $probe"
               exit 1
             fi
+
+            # Checked here rather than left to the build step: rotating DEPLOY_USER to a new
+            # server account costs it both the deploy tree's ownership and docker group
+            # membership, and the second only surfaces after a full rsync has succeeded.
+            if ! docker info >/dev/null 2>&1; then
+              echo "::error::$me on $(hostname) cannot reach the docker socket, so the build step would fail. On the server run: sudo usermod -aG docker $me"
+              exit 1
+            fi
+            echo "docker: reachable"
 
       - name: Sync files to server
         run: |
