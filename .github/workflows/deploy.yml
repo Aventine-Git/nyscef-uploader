@@ -39,9 +39,57 @@ jobs:
       - name: Install sshpass
         run: sudo apt-get install -y sshpass
 
+      # rsync writes every file through a temp file in its parent directory, so a deploy tree
+      # the deploy user cannot own or write fails ~80 times with "mkstemp: Permission denied"
+      # and "failed to set times" — which reads like an rsync flag problem rather than a
+      # permissions one. Check up front and print the repair command instead.
+      #
+      # The identity lines are printed on every run, pass or fail: the 2026-09 failure looked
+      # like plain ownership drift, but checking by hand over `ssh server` showed the tree
+      # owned by cat and writable. A laptop's ssh config and CI's DEPLOY_USER/DEPLOY_HOST
+      # secrets can resolve to different users, and the router's port-forward to a different
+      # host, so only CI can say who it actually was.
+      - name: Verify deploy directory is writable by the deploy user
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          script: |
+            set -e
+            dir=/opt/nyscef-uploader
+            me=$(id -un)
+
+            echo "deploy identity: host=$(hostname) user=$me uid=$(id -u)"
+
+            if [ ! -d "$dir" ]; then
+              echo "::error::$dir does not exist on $(hostname). On the server run: sudo mkdir -p $dir && sudo chown $me:$me $dir"
+              exit 1
+            fi
+
+            echo "deploy target: $dir owner=$(stat -c '%U:%G' "$dir") mode=$(stat -c '%a' "$dir") ctime=$(stat -c '%z' "$dir")"
+
+            foreign=$(find "$dir" -not -user "$me" -print -quit 2>/dev/null || true)
+            if [ -n "$foreign" ]; then
+              echo "::error::$dir is not fully owned by $me on $(hostname) — $(stat -c '%U' "$foreign") owns $foreign. On the server run: sudo chown -R $me:$me $dir"
+              exit 1
+            fi
+
+            # Prove writability by making rsync's exact syscall rather than trusting the mode
+            # bits: `test -w` is satisfied by an immutable attribute, a read-only remount, a
+            # restrictive ACL or a full disk, all of which still fail mkstemp.
+            if probe=$(mktemp "$dir/.deploy-probe.XXXXXX" 2>&1); then
+              rm -f "$probe"
+              echo "write probe: ok"
+            else
+              echo "::error::cannot create a file in $dir as $me on $(hostname): $probe"
+              exit 1
+            fi
+
       - name: Sync files to server
         run: |
-          sshpass -e rsync -az --delete \
+          sshpass -e rsync -az --delete --omit-dir-times \
             -e "ssh -p ${{ secrets.DEPLOY_PORT }} -o StrictHostKeyChecking=no" \
             --exclude='.git' \
             --exclude='node_modules' \
