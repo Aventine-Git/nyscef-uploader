@@ -87,8 +87,13 @@ export async function checkAlreadyUploaded(doc: Document, realFrom: string): Pro
             return true;
         }
     } else if (doc.type === DocumentType.EVIDENCE) {
-        const checkQuery = `SELECT Evidence FROM Court.UploadedEvidence WHERE ParcelID = ? AND Year = ?`;
-        const result = (await executeSQLQuery(checkQuery, [doc.parcelID, doc.year])) as Array<{ Evidence: string }>;
+        // Keyed on the case's own index, the table's primary key with ParcelID. A village case on the
+        // same parcel can share the year, and under (ParcelID, Year) its filed evidence SKIPped the
+        // town case's filing. Parcel/year remains only for a document that arrives without an index.
+        const [checkQuery, params] = doc.scarID
+            ? [`SELECT Evidence FROM Court.UploadedEvidence WHERE ParcelID = ? AND SCARIndexNumber = ?`, [doc.parcelID, doc.scarID]]
+            : [`SELECT Evidence FROM Court.UploadedEvidence WHERE ParcelID = ? AND Year = ?`, [doc.parcelID, doc.year]];
+        const result = (await executeSQLQuery(checkQuery, params)) as Array<{ Evidence: string }>;
         if (result && result.length > 0) {
             const raw = result[0].Evidence;
             let evidence: string[];
@@ -106,7 +111,7 @@ export async function checkAlreadyUploaded(doc: Document, realFrom: string): Pro
             }
             const capitalizedIdentifier = doc.identifier.charAt(0).toUpperCase() + doc.identifier.slice(1);
             if (evidence.includes(capitalizedIdentifier)) {
-                console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} - Evidence "${capitalizedIdentifier}" already uploaded`);
+                console.log(`⏭️ Skipping ParcelID: ${doc.parcelID} (${doc.scarID}) - Evidence "${capitalizedIdentifier}" already uploaded`);
                 return true;
             }
         }
