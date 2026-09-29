@@ -67,8 +67,15 @@ async function pollSQS(): Promise<void> {
 }
 
 function startRetryScheduler(): void {
+    // A post-outage sweep outlasts the 15-minute interval (111 items on 2026-09-29), and a second
+    // sweep started from a fresh snapshot only races the first for the same rows.
+    let sweepRunning = false;
     const run = async () => {
         if (isShuttingDown) return;
+        if (sweepRunning) {
+            console.log('[worker] Previous retry sweep still running — skipping this tick.');
+            return;
+        }
         // Skip the retry sweep during a Cloudflare cooldown — re-running failed items now would
         // just burn their remaining attempts against the same block. The next tick picks them up.
         if (isInCooldown()) {
@@ -76,10 +83,13 @@ function startRetryScheduler(): void {
             return;
         }
         console.log('[worker] Running scheduled retry of failed items...');
+        sweepRunning = true;
         try {
             await retryFailedItems();
         } catch (err: any) {
             console.error('[worker] Retry scheduler error:', err.message);
+        } finally {
+            sweepRunning = false;
         }
     };
 

@@ -86,14 +86,19 @@ export async function getQueueItemById(id: number): Promise<QueueItem | null> {
     } as QueueItem;
 }
 
-export async function claimQueueItem(id: number): Promise<void> {
+// False when another pass got there first. Callers select QUEUED/FAILED rows, but the retry sweep
+// works from a snapshot: an unguarded claim re-took rows SQS had just filed, and the second pass
+// relabelled 67 of them SKIPPED on 2026-09-29 — dropping any such stip from the clerk email.
+export async function claimQueueItem(id: number): Promise<boolean> {
     // SubmittedAt is cleared on claim because it describes the attempt in flight, not the row's
     // history. Carrying a previous attempt's value forward would make the stuck-item sweep read a
     // fresh attempt that never reached submit as one that did.
-    await executeSQLQuery(
-        `UPDATE Court.NyscefUploadQueue SET Status = 'PROCESSING', Attempts = Attempts + 1, SubmittedAt = NULL, UpdatedAt = NOW() WHERE ID = ?`,
+    const result = await executeSQLQuery(
+        `UPDATE Court.NyscefUploadQueue SET Status = 'PROCESSING', Attempts = Attempts + 1, SubmittedAt = NULL, UpdatedAt = NOW()
+          WHERE ID = ? AND Status IN ('QUEUED', 'FAILED')`,
         [id]
     );
+    return result.affectedRows === 1;
 }
 
 export async function markUploaded(id: number): Promise<void> {
