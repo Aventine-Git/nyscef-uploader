@@ -185,6 +185,11 @@ Once uploads work again, re-run them (ignores the attempt cap):
 Both live in [src/queue/queueProcessor.ts](src/queue/queueProcessor.ts). Historical note: the June
 incidents show items reaching `Attempts = 4`/`5`, i.e. they required exactly this manual force-retry.
 
+**Neither has a date bound** — they sweep the table's whole history. On 2026-09-29 four rows from the
+09-10 outage were still exhausted although each had already filed through a re-queued twin. To retry
+only specific rows, check they are unfiled (`Court.UploadedEvidence` / `UploadedMiscDocs` / the queue),
+then set `Attempts = 2` on them by `ID`; the next 15-minute sweep files each once.
+
 ## The cooldown circuit
 
 To stop a blip from stampeding the queue, the worker **pauses all consumption** as soon as a

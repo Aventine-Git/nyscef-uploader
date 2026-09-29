@@ -178,7 +178,13 @@ export function resolveIngestOutcome(
 }
 
 async function processItem(item: QueueItem, notifyOnComplete = true): Promise<void> {
-    await claimQueueItem(item.ID);
+    if (!(await claimQueueItem(item.ID))) {
+        console.log(
+            `Queue item ID=${item.ID} ParcelID=${item.ParcelID} was no longer QUEUED/FAILED at claim time ` +
+                `(snapshot said ${item.Status}) — another pass has it; skipping.`
+        );
+        return;
+    }
 
     const testing = item.Testing;
     const ingestID = item.IngestID ?? undefined;
