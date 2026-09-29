@@ -6,20 +6,42 @@ on the server.
 
 ---
 
-## Why a local server instead of Lambda
+## Why a local server instead of AWS
 
-The Lambda approach required a VPC + NAT Gateway + Elastic IP to give Lambda a fixed outbound IP
-(so the Cloudflare `cf_clearance` cookie would be valid). That VPC setup was fragile and expensive.
+**The blocking reason is egress reputation, not cost or complexity: Cloudflare denies AWS IP ranges
+outright on `iapps.courts.state.ny.us`.** This uploader is its third incarnation — Lambda, then ECS,
+now this server — and both AWS attempts were blocked at the network edge regardless of how the
+compute was configured. An Elastic IP does not help: the deny is on the range, not the reputation of
+one address.
 
-A local server with a fixed IP **is exactly what we needed all along**:
+**The rule to remember: datacenter IPs are denied; residential/mobile-class IPs are tolerated.** Any
+proposal to move this back to EC2/ECS/Lambda, or to route it through a datacenter proxy (including
+any free proxy list, which is overwhelmingly datacenter IPs), fails for this same reason. It is worth
+five seconds to check a candidate egress before building on it:
+
+```bash
+curl -s https://iapps.courts.state.ny.us/nyscef/Login | grep -oE "Request Could Not Be Processed|Just a moment"
+```
+
+`Just a moment` = a solvable challenge, this egress works. `Request Could Not Be Processed` = the IP
+is denied, stop here. Both are served as HTTP 403, so the status code cannot tell them apart — see
+[CLOUDFLARE-RUNBOOK.md](CLOUDFLARE-RUNBOOK.md).
+
+The secondary advantages of a local server, which are real but were never the deciding factor:
 
 | | Lambda | This server |
 |---|---|---|
+| Egress accepted by NYSCEF | **No — AWS ranges are denied** | **Yes — residential line** |
 | Fixed IP | Required VPC + NAT Gateway | Built in — server IP is fixed |
 | Cold starts | Every ~15 min → browser restarts, Cloudflare challenge | None — browser runs continuously |
 | Memory limits | 1-3 GB cap, crashes Chromium | No cap |
 | Execution timeout | 15 min hard limit | None |
 | Complexity | VPC, subnets, security groups, NAT | Just Docker |
+
+This server's IP is a dependency, not a given: on 2026-09-10 it was itself denied (incidents
+#1920/#1921), which stopped all filing until the block was lifted externally, and it cannot simply be
+changed — it is a static Verizon FiOS assignment and is allowlisted in two AWS security groups. See
+[CLOUDFLARE-RUNBOOK.md → Egress denied](CLOUDFLARE-RUNBOOK.md#egress-denied-the-ip-is-blocked).
 
 ---
 
