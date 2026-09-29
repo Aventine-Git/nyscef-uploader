@@ -1,6 +1,7 @@
 import { Page } from 'playwright-core';
 import { bustCfCookieCache, clearCfCookie } from './initBrowser.js';
 import { CloudflareBlockError } from '../errors.js';
+import { classifyCloudflareBlock } from './classifyBlock.js';
 import { getNyscefCredentials } from './credentials.js';
 
 export async function login(page: Page) {
@@ -37,21 +38,33 @@ export async function login(page: Page) {
             .catch(() => false);
         if (!cleared) {
             bustCfCookieCache();
-            throw new CloudflareBlockError(`Cloudflare 503 interstitial not cleared (status=${status}, url=${page.url()}) — cf_clearance cookie missing or IP-mismatched for this Lambda container`);
+            throw new CloudflareBlockError(`Cloudflare 503 interstitial not cleared (status=${status}, url=${page.url()}) — cf_clearance cookie missing or IP-mismatched for this session`);
         }
     } else if (challengeUrl || status === 403) {
-        // Managed challenge / hard block — not solvable in-browser. Bust the cache so the
-        // next init re-fetches the cookie (in case it was rotated externally) and throw
-        // CloudflareBlockError (noRetry=true) so all retry loops bail immediately rather than
-        // hammering Cloudflare's rate limiter. SQS visibility timeout provides the delay.
+        // Not solvable in-browser. CloudflareBlockError is noRetry, so every retry loop bails
+        // instead of hammering Cloudflare's rate limiter; the cooldown circuit provides the delay.
+        const kind = classifyCloudflareBlock(await page.content().catch(() => ''));
+
+        // A denied IP is not a cookie problem, and clearing cf_clearance on one threw away a valid
+        // cookie on 2026-09-10. The cf-ray is what OCA needs to look the block up.
+        if (kind === 'EGRESS_DENIED') {
+            const ray = gotoResponse?.headers()['cf-ray'] ?? 'unknown';
+            throw new CloudflareBlockError(
+                `Cloudflare denied this egress IP (status=${status}, url=${page.url()}, cf-ray=${ray}) — ` +
+                    `not a cookie problem and not cleared by retrying; see CLOUDFLARE-RUNBOOK.md`
+            );
+        }
+
+        // An injected cookie that still drew a challenge is stale; evict it so the next attempt
+        // arrives clean, since re-injecting a dead cookie provokes a harder challenge than none.
         bustCfCookieCache();
-        // If we injected a stored cookie and still got 403, the cookie is stale for this IP.
-        // Evict it from Secrets Manager immediately so the next cold start arrives clean —
-        // re-injecting a dead cookie provokes a harder challenge than no cookie at all.
         if (process.env.CF_INJECT_COOKIE === 'true') {
             void clearCfCookie();
         }
-        throw new CloudflareBlockError(`Cloudflare challenge (status=${status}, url=${page.url()}) — cf_clearance cookie missing or IP-mismatched for this Lambda container`);
+        throw new CloudflareBlockError(
+            `Cloudflare challenge (status=${status}, url=${page.url()}) — a stale cf_clearance, or Cloudflare flagging ` +
+                `this browser build; CLOUDFLARE-RUNBOOK.md tells them apart`
+        );
     }
 
     const { username, password } = await getNyscefCredentials();
