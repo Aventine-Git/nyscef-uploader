@@ -11,7 +11,7 @@ A long-running Node.js worker (`src/worker.ts`) does two things:
 - **Polls SQS** every 20 seconds for new upload jobs (each message is `{ id: <NyscefUploadQueue row ID> }`)
 - **Retries failed items** every 15 minutes (items stuck in `PROCESSING` > 15 min are reset to `FAILED` first)
 
-Each job fetches the queue item from `Court.NyscefUploadQueue`, downloads the PDF from S3, launches a Chromium browser, logs into NYSCEF, and files the document. One document per SQS message.
+Each job fetches the queue item from `Court.NyscefUploadQueue`, downloads the PDF from S3, launches a headless Google Chrome, logs into NYSCEF, and files the document. One document per SQS message.
 
 Everything else — database, S3, Secrets Manager, invoking other Lambdas — is unchanged from the Lambda version.
 
@@ -21,12 +21,12 @@ For full deployment instructions, see [SERVER-DEPLOY.md](SERVER-DEPLOY.md).
 
 ## Features
 
-- Uploads stipulation, evidence, and misc letter PDFs to NYSCEF via Playwright + Chromium
+- Uploads stipulation, evidence, and misc letter PDFs to NYSCEF via Playwright + Google Chrome (not Playwright's bundled Chromium, which Cloudflare challenges — see [CLOUDFLARE-RUNBOOK.md](CLOUDFLARE-RUNBOOK.md#browser-flagged-challenged-even-arriving-clean))
 - **Queue-based processing** — reads from `Court.NyscefUploadQueue`, processes one document per SQS message
 - **Automatic retry** — failed items are retried up to 3 times; scheduler runs every 15 minutes
 - **Stuck-item recovery** — items stuck in `PROCESSING` for 15+ minutes are automatically reset to `FAILED`
 - **Consolidated notifications** — waits for all items in an ingest to complete before sending a summary notification
-- **Browser stability** — browser initialization retries up to 3 times with a fresh Chromium instance on each attempt
+- **Browser stability** — browser initialization retries up to 3 times with a fresh browser instance on each attempt
 - Handles stipulations, evidence (Sales Comp Analysis / Equity Report), and misc letters (correspondence to judge)
 - Emails SCAR clerks (with the negotiator CC'd) and handles withdrawal status updates after successful upload
 - Supports testing mode (no actual NYSCEF submission)

@@ -129,22 +129,49 @@ aws secretsmanager get-secret-value --secret-id nyscef/cf_clearance \
   --query SecretString --output text
 ```
 
-Then re-bootstrap the cookie for the **current** IP by following
-[SERVER-DEPLOY.md → Part 5 "Bootstrap the Cloudflare Cookie"](SERVER-DEPLOY.md#part-5--bootstrap-the-cloudflare-cookie)
-(restart with `WARM_START_LOGIN=true`, or run the login test). Watch the logs:
+The cooldown probe already arrives clean once per window, which is all a re-bootstrap
+([SERVER-DEPLOY.md → Part 5](SERVER-DEPLOY.md#part-5--bootstrap-the-cloudflare-cookie)) does. Read
+its outcome in the logs:
 
-- `Cloudflare 503 interstitial — waiting for it to auto-solve...` → `Persisted fresh cf_clearance`
-  = **success.** The IP was fine, the cookie was just stale. Uploads resume; recover any burned
-  items with `forceRetryExhaustedItems` (see below).
-- Still `status=403` on a **clean** arrival → the **IP itself** is the problem. You cannot mint a
-  cookie you can't earn. Options, in order:
-  1. **Wait it out.** Rate-limit reputation often recovers on its own in tens of minutes — the
-     [cooldown circuit](#the-cooldown-circuit) is already doing this for you.
-  2. **Rotate the outbound IP** (new EIP / restart the NAT / ISP re-lease). Confirm it changed with
-     `curl ifconfig.me`, then re-bootstrap.
-  3. **Route through a residential/mobile proxy.** The browser already honors `PROXY_URL`
-     ([src/uploader/initBrowser.ts](src/uploader/initBrowser.ts#L102)); set it in the env and
-     restart. This gives a fresh, residential-reputation egress.
+- `arriving clean` → `Login page response: status=200` → `Persisted fresh cf_clearance` =
+  **success.** The cookie was just stale — 2026-09-14 and 09-23 healed this way within one window.
+  Recover any burned items with `forceRetryExhaustedItems` (see below).
+- Still `status=403` on **every** clean arrival → the IP or the browser. Load the login page in a
+  real Chrome at the office, which shares the server's egress IP:
+  - **Chrome gets the login form** → the browser build is flagged; see
+    [Browser flagged](#browser-flagged-challenged-even-arriving-clean).
+  - **Chrome is challenged too** → the IP. Wait it out first — rate-limit reputation often recovers
+    in tens of minutes, and the [cooldown circuit](#the-cooldown-circuit) is already doing this. The
+    IP is static and cannot be rotated, so beyond that the options are those under
+    [Egress denied](#egress-denied-the-ip-is-blocked).
+
+## Browser flagged (challenged even arriving clean)
+
+Every clean arrival draws the `Just a moment` managed challenge, while a real Chrome from the same IP
+goes straight to the login form. Cloudflare is recognising the browser, not the IP or the cookie, so
+waiting, re-bootstrapping and proxies change nothing.
+
+On 2026-09-29 (#1976/#1977) it began challenging Playwright's own Chromium — builds 141 and 147 alike —
+while passing Google Chrome 153/154 with the same stealth setup from the same IP, which is why the
+uploader runs Google Chrome stable. Chrome's version is fixed when the image builds, so a stale Chrome
+is the first suspect next time; every launch logs `Launched Google Chrome <version>`.
+
+Test a candidate image **before** deploying it, in a throwaway container with no env — it injects no
+cookie and reads no secret (build one with `docker build -t nyscef-uploader:candidate .` from a copy
+of the branch):
+
+```bash
+docker run --rm --shm-size=1g --entrypoint node nyscef-uploader:candidate --input-type=module -e "
+const { initBrowser } = await import('/app/dist/uploader/initBrowser.js');
+const { browser, context } = await initBrowser();
+const page = await context.newPage();
+const r = await page.goto('https://iapps.courts.state.ny.us/nyscef/Login', { waitUntil: 'domcontentloaded' });
+console.log('status', r.status(), 'login form', await page.isVisible('#txtUserName'));
+await browser.close();"
+```
+
+`status 200 login form true` = Cloudflare accepts that browser. `status 403` = production would be
+challenged too.
 
 ### Recovering items that burned their attempts
 
@@ -195,11 +222,12 @@ via the court system's channel. See [README.md → Cloudflare / login issues](RE
 |-------|-------|
 | Block detection + error message | [src/uploader/login.ts](src/uploader/login.ts) |
 | Cookie load / inject / evict | [src/uploader/initBrowser.ts](src/uploader/initBrowser.ts) |
+| Browser build (Google Chrome stable, fixed at image build) | [Dockerfile](Dockerfile), launched in [src/uploader/initBrowser.ts](src/uploader/initBrowser.ts) |
 | Consecutive-failure pager (threshold 3) | [src/helpers/uploadHealth.ts](src/helpers/uploadHealth.ts) |
 | Cooldown pause + sustained-outage pager | [src/helpers/cfCooldown.ts](src/helpers/cfCooldown.ts) |
 | Force-retry helpers | [src/queue/queueProcessor.ts](src/queue/queueProcessor.ts) |
 | Cookie bootstrap procedure | [SERVER-DEPLOY.md Part 5](SERVER-DEPLOY.md) |
 | Queue table | `Court.NyscefUploadQueue` |
 | Stored cookie | Secrets Manager `nyscef/cf_clearance` |
-| Proxy override | env `PROXY_URL` |
+| Proxy override | env `PROXY_URL` (not written by `deploy.yml` yet) |
 | Cooldown window | env `CF_COOLDOWN_MS` (default 600000) |

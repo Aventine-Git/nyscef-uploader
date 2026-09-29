@@ -288,7 +288,7 @@ docker --context nyscef-server compose up --build -d
 
 **What this does:**
 - Sends your local source files to the server's Docker daemon over SSH
-- Builds the image on the server (Node.js 22 + Chromium — takes 5–15 min first time)
+- Builds the image on the server (Node.js 22 + Google Chrome — takes 5–15 min first time)
 - Starts the container in the background
 
 Check it started:
@@ -559,7 +559,7 @@ AWS Console → SQS → select your queue → **Edit** → set "Visibility timeo
     ├── reads DB creds from Secrets Manager
     ├── reads/writes cf_clearance cookie in Secrets Manager
     ├── connects to MySQL database
-    ├── launches Chromium → logs into NYSCEF → uploads PDF
+    ├── launches Google Chrome → logs into NYSCEF → uploads PDF
     ├── invokes notifier Lambda (Slack + email notification)
     └── retries failed items every 15 minutes
 ```

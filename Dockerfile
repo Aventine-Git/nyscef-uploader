@@ -8,10 +8,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-# Install Playwright Chromium and all its OS dependencies.
-# Doing this BEFORE copying src means the ~300MB browser layer is cached and only
-# rebuilds when the playwright version changes.
-RUN npx playwright install --with-deps chromium
+# Google Chrome stable, not Playwright's Chromium, which Cloudflare challenges (CLOUDFLARE-RUNBOOK.md).
+# Chrome's version is whatever was current when this layer built, and the layer is cached until the
+# lines above it change — refreshing Chrome means rebuilding without cache.
+RUN npx playwright install --with-deps chrome
 
 # ── Build TypeScript ──────────────────────────────────────────────────────────
 COPY tsconfig.json ./

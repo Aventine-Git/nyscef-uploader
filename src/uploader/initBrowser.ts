@@ -1,18 +1,13 @@
-import chromium from '@sparticuz/chromium';
-import { readFileSync } from 'fs';
 import type { ChromiumBrowser } from 'playwright-core';
 import { chromium as playwright } from 'playwright-extra';
-import { fileURLToPath } from 'url';
 import { getSecret, updateSecret } from '../shared_helpers/secrets.js';
 
-// Keep UA version in sync with the actual @sparticuz/chromium binary version.
-// @sparticuz/chromium uses the Chromium major version as its own semver major (e.g. 141.0.0 = Chromium 141).
-// A mismatch between the TLS fingerprint and the declared UA is a strong Cloudflare bot signal.
-// Note: readFileSync bypasses the package's `exports` field (createRequire/import would throw ERR_PACKAGE_PATH_NOT_EXPORTED).
-const chromiumPkgPath = fileURLToPath(new URL('../../node_modules/@sparticuz/chromium/package.json', import.meta.url));
-const { version: chromiumPkgVersion } = JSON.parse(readFileSync(chromiumPkgPath, 'utf-8')) as { version: string };
-const chromiumMajor = chromiumPkgVersion.split('.')[0]; // "141"
-const CHROME_USER_AGENT = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromiumMajor}.0.0.0 Safari/537.36`;
+// Headless Chrome announces itself as HeadlessChrome, so the UA is replaced — with the running
+// browser's own major, because a UA that disagrees with the TLS fingerprint is a Cloudflare bot signal.
+function chromeUserAgent(browserVersion: string): string {
+    const major = browserVersion.split('.')[0];
+    return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
 
 // Cached per container — the browser is kept warm across invocations (see uploader.ts),
 // so this only runs on cold start. Secret format: { "cf_clearance": "<value>" }
@@ -80,24 +75,13 @@ async function getCfCookie(): Promise<string> {
 }
 
 export async function initBrowser(): Promise<{ browser: ChromiumBrowser; context: any }> {
-    let browser: ChromiumBrowser | undefined = undefined;
-    const isLambda = !!process.env.AWS_LAMBDA_FUNCTION_NAME;
-    console.log('Running in AWS Lambda:', isLambda);
-
-    if (isLambda) {
-        chromium.setGraphicsMode = false; // Disable GPU
-
-        browser = await playwright.launch({
-            args: [...chromium.args, '--disable-dev-shm-usage', '--disable-gpu', '--single-process', '--no-zygote', '--disable-setuid-sandbox'],
-            executablePath: await chromium.executablePath(),
-            headless: true,
-        });
-    } else {
-        browser = await playwright.launch({ headless: true });
-    }
+    // Google Chrome, not Playwright's bundled Chromium: from 2026-09-29 Cloudflare challenged
+    // Playwright's Chromium builds (141 and 147 alike) while passing Chrome from the same IP.
+    const browser: ChromiumBrowser = await playwright.launch({ headless: true, channel: 'chrome' });
+    console.log(`Launched Google Chrome ${browser.version()}`);
 
     const context = await browser.newContext({
-        userAgent: CHROME_USER_AGENT,
+        userAgent: chromeUserAgent(browser.version()),
         viewport: { width: 1920, height: 1080 },
         ...(process.env.PROXY_URL ? { proxy: { server: process.env.PROXY_URL } } : {}),
     });
