@@ -112,7 +112,7 @@ Three types are supported — all handled by `DocumentType` in `src/types.ts`:
 | Type | NYSCEF filing type | Notes |
 |------|--------------------|-------|
 | `STIPULATION` | Appropriate stip variant based on `disposition` code | DB: `StipTracking.Status = 'NyscefUploaded'` |
-| `EVIDENCE` | `EXHIBIT(S)`, auto-lettered A→Z | DB: `Court.UploadedEvidence`; deduped per `(ParcelID, Year, identifier)` |
+| `EVIDENCE` | `EXHIBIT(S)`, auto-lettered A→Z | DB: `Court.UploadedEvidence`; deduped per `(ParcelID, SCARIndexNumber, identifier)`, the case's own index, because a village case on the same parcel can share the year |
 | `MISC` | Depends on the identifier code — see below | DB: `Court.UploadedLetters` or `Court.UploadedMiscDocs` |
 
 The doc-type branch lives in [`src/uploader/upload.ts`](src/uploader/upload.ts) (NYSCEF dropdown selection),

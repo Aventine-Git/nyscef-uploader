@@ -327,3 +327,32 @@ describe('checkAlreadyUploaded — MISC (legacy direct-invoke, no s3Key)', () =>
         expect(miscCalls).toHaveLength(0);
     });
 });
+
+// A town case and a village case on one parcel can share a year (Rockland 071409/2026 and village
+// 070049/2026, 2026-09-29). Read by (ParcelID, Year), the village's filed evidence SKIPped the town
+// case's filing, which was then never made. The case's own row must still block a real re-file.
+describe('checkAlreadyUploaded — EVIDENCE is keyed on the case index', () => {
+    const uploadedEvidence = [{ ParcelID: 'ROC-001', Year: 2026, SCARIndexNumber: '070049/2026', Evidence: ['Unequal'] }];
+
+    beforeEach(() => {
+        mockSQL.mockImplementation(async (query: string, params: any[]) =>
+            uploadedEvidence
+                .filter(
+                    (r) =>
+                        r.ParcelID === params[0] &&
+                        (query.includes('SCARIndexNumber = ?') ? r.SCARIndexNumber === params[1] : r.Year === params[1])
+                )
+                .map(({ Evidence }) => ({ Evidence })) as any
+        );
+    });
+
+    it("does not treat a village sibling's filed evidence as the town case's", async () => {
+        const town = { ...evidenceDoc('Unequal'), parcelID: 'ROC-001', year: 2026, scarID: '071409/2026' };
+        expect(await checkAlreadyUploaded(town, 'a@b.com')).toBe(false);
+    });
+
+    it("still skips a re-file of the case's own evidence", async () => {
+        const village = { ...evidenceDoc('Unequal'), parcelID: 'ROC-001', year: 2026, scarID: '070049/2026' };
+        expect(await checkAlreadyUploaded(village, 'a@b.com')).toBe(true);
+    });
+});
