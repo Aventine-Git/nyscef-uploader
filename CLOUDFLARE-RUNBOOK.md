@@ -3,8 +3,8 @@
 On-call guide for the NYSCEF uploader when you get a page like:
 
 > **3 consecutive NYSCEF upload failures — uploads appear systemically broken.**
-> Latest: ParcelID … Cloudflare challenge (status=403, url=…`__cf_chl_rt_tk`…) — cf_clearance
-> cookie missing or IP-mismatched for this Lambda container
+> Latest: ParcelID … Cloudflare challenge (status=403, url=…`__cf_chl_rt_tk`…) — a stale
+> cf_clearance, or Cloudflare flagging this browser build; CLOUDFLARE-RUNBOOK.md tells them apart
 
 ## TL;DR
 
@@ -16,7 +16,7 @@ curl -s https://iapps.courts.state.ny.us/nyscef/Login | grep -oE "Request Could 
 ```
 
 - **`Just a moment`** (or no match) → an ordinary **challenge**. Usually a transient rate-limit blip
-  that self-heals. Go to [Step 1](#step-1-did-it-already-self-heal-run-this-first) — most of the time
+  that self-heals. Go to [Step 1](#step-1--did-it-already-self-heal-run-this-first) — most of the time
   the items already re-uploaded on a later attempt and there is nothing to fix.
 - **`Request Could Not Be Processed`** → our **egress IP is denied**. No cookie, retry or cooldown
   will fix this; it does not self-heal. Skip to [Egress denied](#egress-denied-the-ip-is-blocked).
@@ -44,12 +44,12 @@ NYSCEF's login page sits behind Cloudflare. The uploader logs in with a stealth 
 
 | Shape | HTTP | Solvable by our browser? | Notes |
 |-------|------|--------------------------|-------|
-| Legacy "checking your browser" interstitial | `503` | **Yes** — JS auto-solves | The happy path when arriving clean |
+| Legacy "checking your browser" interstitial | `503` | **Yes** — JS auto-solves | Not seen since the move to the server — an accepted browser gets `200` straight away |
 | Managed challenge (`__cf_chl_rt_tk` in URL, or `Just a moment`) | `403` | **No** — server-side, TLS/fingerprint-gated | What a stale cookie *or* a flagged browser build draws. Clears when its cause does |
 | **Egress deny** — `Request Could Not Be Processed` | `403` | **Never** | Our IP is on a deny list. A custom NYCourts-branded Cloudflare page; its "support ID" *is* the `cf-ray`. Does not self-heal |
 
 The `cf_clearance` cookie that lets us skip challenges is **cryptographically bound to our
-outbound IP** ([README.md](README.md#L38)). It's earned on a successful 503 solve and reused. When
+outbound IP** ([README.md](README.md#L38)). Cloudflare issues it on any visit it accepts, the worker saves a fresh one after every login, and it is injected on the next. When
 the IP's reputation dips (too many rapid sessions) or the IP changes, Cloudflare escalates to the
 `403` managed challenge, which the stealth browser cannot solve.
 
@@ -103,7 +103,8 @@ will not work: those are datacenter IPs.
    text, the source IP, the onset window, and what the last successful request looked like. Re-run
    the TL;DR `curl` to detect when they have delisted it.
 2. **If it will not be lifted, switch egress** to a paid **residential** proxy — not a VPN or a free
-   proxy list, both of which are datacenter egress. Qualify the provider on its trial first:
+   proxy list, both of which are datacenter egress — with **sticky sessions**, since a filing
+   re-challenged mid-flow by a changed exit IP breaks the NYSCEF session. Qualify it on a trial first:
    ```bash
    curl -s --proxy http://127.0.0.1:8888 https://iapps.courts.state.ny.us/nyscef/Login \
      | grep -oE "Request Could Not Be Processed|Just a moment"

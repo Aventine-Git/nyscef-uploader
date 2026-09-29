@@ -42,8 +42,8 @@ NYSCEF's login page is protected by Cloudflare, which issues a `cf_clearance` co
 **First run (no existing cookie):**
 1. `initBrowser.ts` reads `nyscef/cf_clearance` from Secrets Manager — empty
 2. Browser navigates to NYSCEF without injecting a cookie
-3. Cloudflare shows a 503 interstitial ("Checking your browser...") — the browser auto-solves it
-4. Login succeeds; the resulting `cf_clearance` is saved back to Secrets Manager
+3. Cloudflare lets the browser straight through (`status=200`) and issues a `cf_clearance`
+4. Login succeeds; the cookie is saved back to Secrets Manager
 
 **Subsequent runs:**
 1. `initBrowser.ts` reads `nyscef/cf_clearance` from Secrets Manager — has a value
@@ -54,7 +54,8 @@ NYSCEF's login page is protected by Cloudflare, which issues a `cf_clearance` co
 **Stale cookie (403 on an injected cookie):**
 1. `login.ts` detects the 403 and calls `clearCfCookie()` — evicts the bad value from Secrets Manager
 2. Throws `CloudflareBlockError` to stop retry loops immediately
-3. Next attempt arrives clean and re-bootstraps via the 503 interstitial path
+3. Next attempt arrives clean and earns a fresh cookie. If clean arrivals keep being challenged, Cloudflare is
+   flagging the browser build rather than the cookie — see [CLOUDFLARE-RUNBOOK.md](CLOUDFLARE-RUNBOOK.md#browser-flagged-challenged-even-arriving-clean)
 
 ### NYSCEF credentials
 
