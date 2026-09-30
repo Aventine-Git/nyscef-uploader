@@ -2,14 +2,18 @@ import { executeSQLQuery } from '../shared_helpers/sql.js';
 import { Document } from '../types.js';
 
 export default async function getCourtDate(document: Document): Promise<string | null> {
+    // Keyed on parcel, because index numbers repeat across counties (EFSC2026-2 is both an L and a G
+    // case). Year only breaks ties: motion letters are queued under the court date's year, not the case's.
     const query = `
         SELECT IFNULL(h.AdjournmentDate, h.CourtDate) AS HearingDate
         FROM aventinedb.Courtfiles cf
-        LEFT JOIN Court.HearingDates h ON cf.CourtDateID = h.CourtDateID
-        WHERE cf.SCARIndexNumber = ? AND cf.Year = ?
+        LEFT JOIN Court.HearingDates h ON h.CourtDateID = IF(cf.SCARIndexNumber = ?, cf.CourtDateID, cf.VillageCourtDateID)
+        WHERE cf.ParcelID = ? AND (cf.SCARIndexNumber = ? OR cf.VillageSCARIndexNumber = ?)
+        ORDER BY cf.Year = ? DESC, cf.Year DESC
         LIMIT 1`;
 
-    const result = await executeSQLQuery(query, [document.scarID, document.year]);
+    const { scarID, parcelID, year } = document;
+    const result = await executeSQLQuery(query, [scarID, parcelID, scarID, scarID, year]);
     const row = (result as { HearingDate: string | Date | null }[])?.[0];
     if (!row?.HearingDate) return null;
 
