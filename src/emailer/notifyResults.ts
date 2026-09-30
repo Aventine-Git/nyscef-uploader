@@ -5,6 +5,7 @@ import { findFirstValidCountyCode } from '../helpers/countyCode.js';
 import { findFirstValidNegotiatorID } from '../helpers/negotiator.js';
 import { uploadScreenshotToS3 } from '../helpers/screenshot.js';
 import { formatDataTable } from './formatDataTable.js';
+import { publishDocuments } from './publishDocuments.js';
 import { Document, describeUploadType } from '../types.js';
 import getCourtDate from './getCourtDate.js';
 import { reportIncident } from '../shared_helpers/reporter.js';
@@ -153,17 +154,18 @@ export async function notifyResults(
         body = `<h3 style="color:#e67e22;">⚠️ TESTING MODE - NO DATABASE CHANGES MADE ⚠️</h3>` + body;
     }
 
+    const links = await publishDocuments(documents);
     if (failedDoc !== undefined) {
         body += `<p><strong>Failed ${uploadType} Details:</strong></p>`;
-        body += formatDataTable([failedDoc]);
+        body += formatDataTable([failedDoc], links);
         const failureIndex = documents.indexOf(failedDoc);
         const successfulDocs = documents.slice(0, failureIndex);
         if (successfulDocs.length > 0) {
             body += `<h4>Successful ${uploadType}s Before Failure:</h4>`;
-            body += formatDataTable(successfulDocs);
+            body += formatDataTable(successfulDocs, links);
         }
     } else {
-        body += formatDataTable(documents);
+        body += formatDataTable(documents, links);
     }
 
     const humphreymsg: NotifierMsg = {

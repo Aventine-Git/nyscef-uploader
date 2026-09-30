@@ -91,6 +91,8 @@ QUEUED → PROCESSING → UPLOADED
 
 Notifications are deferred until all items for a given `IngestID` reach a terminal state (`UPLOADED`, `SKIPPED`, or `FAILED`). This sends one summary notification per ingest instead of one per document.
 
+For evidence and misc uploads, each document is copied into the public `notifier-reports` bucket and linked from its row in the report. Stipulations are not: stipulation-ingest's own report already links every page. A document that cannot be read or copied shows as `unavailable` and does not hold up the notification.
+
 ### Who gets notified
 
 Slack is **DM-only** — the uploader first (matched from the queue row's `RealFrom` address), then the case
@@ -319,6 +321,7 @@ src/
   emailer/
     emailSCARClerk.ts       — clerk notification email via gmail-sender
     notifyResults.ts        — success/failure notification via notifier
+    publishDocuments.ts     — copies evidence/misc PDFs to notifier-reports for the report's links
     getClerkEmail.ts        — look up clerk email for a county
     getCourtDate.ts         — look up next court date for a case
   helpers/

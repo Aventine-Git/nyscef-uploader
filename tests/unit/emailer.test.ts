@@ -22,6 +22,7 @@ vi.mock('../../src/helpers/buffer.js', () => ({
 
 import { invokeLambda } from '../../src/shared_helpers/lambda.js';
 import { executeSQLQuery, getUserDetails, getUserByEmail } from '../../src/shared_helpers/sql.js';
+import { putS3 } from '../../src/shared_helpers/s3.js';
 
 import { formatDataTable } from '../../src/emailer/formatDataTable.ts';
 import { getClerkEmail } from '../../src/emailer/getClerkEmail.ts';
@@ -418,6 +419,16 @@ describe('notifyResults — body', () => {
         await notifyResults('3 Uploaded', [doc()], undefined, undefined, false, false);
         const msg = mockInvoke.mock.calls[0][1] as any;
         expect(msg.message).not.toContain('TESTING MODE');
+    });
+
+    // The copy to notifier-reports runs before the notifier is invoked, so an S3 error escaping it
+    // would lose the whole notification, and a link minted before the write would point at nothing.
+    it('still notifies, without a dead link, when a document cannot be copied into the report', async () => {
+        vi.mocked(putS3).mockRejectedValueOnce(new Error('AccessDenied'));
+        await notifyResults('1 Uploaded', [doc({ type: DocumentType.EVIDENCE, identifier: 'sales' })]);
+        const msg = mockInvoke.mock.calls[0][1] as any;
+        expect(msg.message).toContain('unavailable');
+        expect(msg.message).not.toContain('attachments/nyscef-upload-');
     });
 });
 
