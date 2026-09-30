@@ -181,10 +181,12 @@ describe('getCourtDate', () => {
         expect(await getCourtDate(doc())).toBeNull();
     });
 
-    it('queries with scarID and year', async () => {
+    // Five positional placeholders, three of them the index number: a swapped argument would match
+    // no case and silently drop the date from every notification.
+    it('queries by parcel and index, with the year as tiebreak', async () => {
         mockSQL.mockResolvedValueOnce([] as any);
-        await getCourtDate(doc({ scarID: '1234/2024', year: 2024 }));
-        expect(mockSQL).toHaveBeenCalledWith(expect.any(String), ['1234/2024', 2024]);
+        await getCourtDate(doc({ scarID: '1234/2024', parcelID: 'WES-001', year: 2024 }));
+        expect(mockSQL).toHaveBeenCalledWith(expect.any(String), ['1234/2024', 'WES-001', '1234/2024', '1234/2024', 2024]);
     });
 });
 
