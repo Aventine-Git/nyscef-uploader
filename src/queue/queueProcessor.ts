@@ -4,6 +4,9 @@ import { emailSCARClerk } from '../emailer/emailSCARClerk.js';
 import { notifyResults } from '../emailer/notifyResults.js';
 import { handleWithdrawals } from '../helpers/withdrawals.js';
 import { prepareFromQueueItem } from '../preparer/prepareFromQueueItem.js';
+import { getS3 } from '../shared_helpers/s3.js';
+import { streamToBuffer } from '../helpers/buffer.js';
+import { Readable } from 'stream';
 import { reportIncident } from '../shared_helpers/reporter.js';
 import { recordUploadSuccess, recordUploadFailure } from '../helpers/uploadHealth.js';
 import { enterCooldown, clearCooldown } from '../helpers/cfCooldown.js';
@@ -59,6 +62,21 @@ async function recoverStuckItems(): Promise<void> {
     ).catch((e) => console.error('Failed to report stuck-after-submit incident:', e));
 }
 
+/**
+ * The document bytes for the report's link. Stipulations are not linked (stipulation-ingest's own
+ * report carries every page), so they are not read. An unreadable source must not sink the notification.
+ */
+async function readForReport(item: QueueItem): Promise<Buffer> {
+    if (item.DocumentType === DocumentType.STIPULATION) return Buffer.alloc(0);
+    try {
+        const s3Object = await getS3(item.S3Bucket, item.S3Key);
+        return await streamToBuffer(s3Object.Body as Readable);
+    } catch (err: unknown) {
+        console.warn(`Could not read ${item.S3Bucket}/${item.S3Key} (queue row ${item.ID}) for the upload report: ${err instanceof Error ? err.message : String(err)}`);
+        return Buffer.alloc(0);
+    }
+}
+
 async function notifyIfIngestComplete(ingestID: number | undefined, testing: boolean): Promise<void> {
     if (!ingestID) return; // legacy items without an IngestID — direct.ts handles notification
 
@@ -80,24 +98,26 @@ async function notifyIfIngestComplete(ingestID: number | undefined, testing: boo
 
     console.log(`IngestID=${ingestID}: all items terminal (uploaded/skipped/exhausted) — sending consolidated notification.`);
     const items = await getItemsForIngest(ingestID);
-    const docs: Document[] = items.map((item) => ({
-        type: item.DocumentType as DocumentType,
-        scarID: item.ScarID,
-        parcelID: item.ParcelID,
-        year: item.Year,
-        municode: item.ParcelID[3] === '0' && item.ParcelID[4] === '0' ? item.ParcelID.substring(0, 3) : item.ParcelID.substring(0, 5),
-        county: item.County,
-        negotiatorID: item.NegotiatorID,
-        isVillage: item.IsVillage,
-        docBuffer: Buffer.alloc(0), // not needed for notification
-        identifier: item.Identifier,
-        description: item.Description ?? null,
-        s3Key: item.S3Key,
-        exhibitLabelMode: null, // notification-only projection; nothing is filed from these Documents
-        hasBeenUploaded: item.Status === 'UPLOADED' || item.Status === 'SKIPPED',
-        wasSkipped: item.Status === 'SKIPPED',
-        forceUpload: item.ForceUpload,
-    }));
+    const docs: Document[] = await Promise.all(
+        items.map(async (item) => ({
+            type: item.DocumentType as DocumentType,
+            scarID: item.ScarID,
+            parcelID: item.ParcelID,
+            year: item.Year,
+            municode: item.ParcelID[3] === '0' && item.ParcelID[4] === '0' ? item.ParcelID.substring(0, 3) : item.ParcelID.substring(0, 5),
+            county: item.County,
+            negotiatorID: item.NegotiatorID,
+            isVillage: item.IsVillage,
+            docBuffer: await readForReport(item),
+            identifier: item.Identifier,
+            description: item.Description ?? null,
+            s3Key: item.S3Key,
+            exhibitLabelMode: null, // notification-only projection; nothing is filed from these Documents
+            hasBeenUploaded: item.Status === 'UPLOADED' || item.Status === 'SKIPPED',
+            wasSkipped: item.Status === 'SKIPPED',
+            forceUpload: item.ForceUpload,
+        }))
+    );
 
     const uploadedCount = docs.filter((d) => d.hasBeenUploaded && !d.wasSkipped).length;
     const skippedCount = docs.filter((d) => d.wasSkipped).length;
