@@ -147,6 +147,21 @@ the top-right corner of the AWS Console):
       "Resource": "arn:aws:s3:::aventine-court-docs/screenshots/*"
     },
     {
+      "Sid": "S3WriteCombinedStips",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": "arn:aws:s3:::stipulation-ingest-files/combined_stipulations/*"
+    },
+    {
+      "Sid": "S3WriteNotifierReports",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": [
+        "arn:aws:s3:::notifier-reports/attachments/nyscef-upload-*",
+        "arn:aws:s3:::notifier-reports/screenshots/*"
+      ]
+    },
+    {
       "Sid": "LambdaInvokeNotifiers",
       "Effect": "Allow",
       "Action": ["lambda:InvokeFunction"],
@@ -158,6 +173,10 @@ the top-right corner of the AWS Console):
   ]
 }
 ```
+
+`S3WriteNotifierReports` is what lets the upload report link each evidence/misc PDF and a failure's
+screenshot. Without it the copies are denied, every row reads `unavailable`, and a failure notification
+carrying a screenshot is not sent at all.
 
 Click **Next**, name the policy `nyscef-uploader-server-policy`, then **Save changes**.
 
